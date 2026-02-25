@@ -22,8 +22,8 @@ export class Compiler {
     private loopStarts: number[] = [];
     private breakPatches: number[][] = [];
 
-    constructor(private file: string) {
-        this.chunk = { name: '<top>', code: [], constants: [] };
+    constructor(private file: string, private options: { autoInvokeMain?: boolean } = {}) {
+        this.chunk = { name: '<top>', file, code: [], constants: [] };
     }
 
     compile(program: ASTNode): Chunk {
@@ -36,7 +36,9 @@ export class Compiler {
             }
         }
         this.emit_node(program);
-        if (program.kind === 'Program' && program.body.some(n => n.kind === 'FnDecl' && n.name === 'main')) {
+        if ((this.options.autoInvokeMain ?? true) &&
+            program.kind === 'Program' &&
+            program.body.some(n => n.kind === 'FnDecl' && n.name === 'main')) {
             this.emit('GET_GLOBAL', 'main', 0);
             this.emit('CALL', 0, 0);
         }
@@ -343,6 +345,7 @@ export class Compiler {
             case 'BinOp': {
                 if (node.op === 'and') {
                     this.emit_node(node.left);
+                    this.emit('DUP', undefined, node.line);
                     const skip = this.emitJump('JUMP_IF_FALSE', node.line);
                     this.emit('POP', undefined, node.line);
                     this.emit_node(node.right);
@@ -351,6 +354,7 @@ export class Compiler {
                 }
                 if (node.op === 'or') {
                     this.emit_node(node.left);
+                    this.emit('DUP', undefined, node.line);
                     const skip = this.emitJump('JUMP_IF_TRUE', node.line);
                     this.emit('POP', undefined, node.line);
                     this.emit_node(node.right);
@@ -458,7 +462,7 @@ export class Compiler {
     // ─── Helpers ──────────────────────────────────────────────────────────────────
     private compileFnDecl(node: FnDecl): AuraFunction {
         const savedChunk = this.chunk;
-        const fnChunk: Chunk = { name: node.name, code: [], constants: [] };
+        const fnChunk: Chunk = { name: node.name, file: this.file, code: [], constants: [] };
         this.chunk = fnChunk;
         this.pushScope();
         // self is always first local for methods

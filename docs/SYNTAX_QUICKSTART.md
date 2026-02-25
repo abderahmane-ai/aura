@@ -16,6 +16,8 @@ cd C:\Users\wwwab\Development\AURA\compiler
 node dist/main.js ..\examples\data_types.aura
 # (equivalent)
 node dist/main.js run ..\examples\data_types.aura
+# interactive shell
+node dist/main.js repl
 ```
 
 IDE support (syntax highlighting, completions, icon):
@@ -34,6 +36,30 @@ For full friend-sharing install flow (CLI + PATH + VSIX), see `docs/INSTALL.md`.
 ```aura
 # line comment
 ```
+
+## 2.1 Imports and Modules
+
+```aura
+# stdlib/math.aura
+module std.math
+
+fn clamp(x: Float64, lo: Float64, hi: Float64) -> Float64:
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+```
+
+```aura
+# app.aura
+import std.math as math
+
+fn main():
+    io.println("{math.clamp(42, 0, 10)}")
+```
+
+`std.math` resolves to `stdlib/math.aura` in this repo.
 
 ## 3. Variables
 
@@ -215,6 +241,8 @@ Common list methods:
 - `len()`
 - `first()`, `last()`
 - `sum()`
+- `map(fn)`
+- `filter(fn)`
 - `is_empty()`
 - `clear()`
 
@@ -339,9 +367,35 @@ fn main():
     io.println("indexed get: {first_user}")
 ```
 
+### 12.2 Math Module (new)
+
+`stdlib/math.aura` provides:
+- Core numerics and rounding: `clamp`, `floor`, `ceil`, `round_to`, `round_sig`
+- Exponential/log/trig: `exp`, `ln`, `log10`, `sin`, `cos`, `tan`, `atan2`
+- Integer/combinatorics: `gcd`, `lcm`, `is_prime`, `factorial`, `npr`, `ncr`
+- Statistics: `sum`, `mean`, `median`, `mode`, `variance`, `stddev`, `quantile`
+- Deterministic RNG: `rng(seed)`, `rand01`, `rand_int`, `choice`, `shuffle`
+- Practical helpers: `safe_div`, `percent`, `percent_change`, `weighted_mean`
+- Aura twists:
+- `math.balance` for total-preserving rounding/splitting
+- `math.exact` for decimal-safe arithmetic helpers
+- `math.scale(...)` for robust normalization models
+
+`math.balance` solves rounding drift while preserving exact totals:
+
+```aura
+import std.math as math
+
+fn main():
+    let fixed = math.balance.round_to_total([33.333, 33.333, 33.333], 100, 2)
+    let exact_sum = math.exact.add(0.1, 0.2, 6)
+    let scaler = math.scale([2, 3, 3, 4, 200], "robust", true)
+    io.println("fixed={fixed} exact={exact_sum} map(4)={scaler.map(4)}")
+```
+
 ## 13. Current MVP Limits (in this repo)
 
-- Single-file execution (`import`/modules are parsed but not executed).
+- Modules execute in a shared global runtime (true module isolation is not implemented yet).
 - `async/await` tokens exist but runtime is synchronous.
 - Interfaces/traits are runtime-light (structural behavior is minimal).
 - Some advanced type-system features are parsed but not enforced at runtime.
@@ -355,3 +409,5 @@ fn main():
 - Classes and OOP (includes facets): `examples/classes_oop.aura`
 - Native data structures: `examples/native_data_structures.aura`
 - Constraints + measures: `examples/data_types.aura`
+- Imports + map/filter: `examples/imports_map_filter.aura`
+- Math module: `examples/math_library.aura`

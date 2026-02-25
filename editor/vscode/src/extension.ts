@@ -1,5 +1,7 @@
 declare function require(name: string): any;
 const vscode: any = require('vscode');
+const fs: any = require('fs');
+const path: any = require('path');
 
 type AuraType =
     | 'string'
@@ -19,6 +21,13 @@ interface MethodSpec {
     detail: string;
     snippet?: string;
     doc?: string;
+}
+
+interface ImportPathInfo {
+    modulePath: string;
+    alias?: string;
+    pathStart: number;
+    pathEnd: number;
 }
 
 const KEYWORD_DOCS: Record<string, string> = {
@@ -155,6 +164,8 @@ const TYPE_METHODS: Record<AuraType, MethodSpec[]> = {
         { name: 'sum', detail: 'list.sum() -> Number' },
         { name: 'append', detail: 'list.append(value)', snippet: 'append(${1:value})' },
         { name: 'push', detail: 'list.push(value)', snippet: 'push(${1:value})' },
+        { name: 'map', detail: 'list.map(fn) -> List', snippet: 'map(${1:fn(x) = x})' },
+        { name: 'filter', detail: 'list.filter(fn) -> List', snippet: 'filter(${1:fn(x) = true})' },
     ],
     indexed: [
         { name: 'len', detail: 'indexed.len() -> Int' },
@@ -266,6 +277,9 @@ export function activate(context: any): void {
 
     const hoverProvider = vscode.languages.registerHoverProvider({ language: 'aura' }, {
         provideHover(document: any, position: any): any {
+            const importHover = provideImportHover(document, position);
+            if (importHover) return importHover;
+
             const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
             if (!range) return undefined;
             const word = document.getText(range);
@@ -275,7 +289,22 @@ export function activate(context: any): void {
         },
     });
 
-    context.subscriptions.push(completionProvider, hoverProvider);
+    const definitionProvider = vscode.languages.registerDefinitionProvider({ language: 'aura' }, {
+        provideDefinition(document: any, position: any): any {
+            const resolved = resolveImportDefinition(document, position);
+            if (!resolved) return undefined;
+            const uri = vscode.Uri.file(resolved);
+            return new vscode.Location(uri, new vscode.Position(0, 0));
+        },
+    });
+
+    const documentLinkProvider = vscode.languages.registerDocumentLinkProvider({ language: 'aura' }, {
+        provideDocumentLinks(document: any): any[] {
+            return buildImportDocumentLinks(document);
+        },
+    });
+
+    context.subscriptions.push(completionProvider, hoverProvider, definitionProvider, documentLinkProvider);
 }
 
 function provideAuraCompletions(document: any, position: any): any[] {
@@ -447,6 +476,120 @@ function isInsideString(before: string): boolean {
         if (ch === '\'' && !inDouble) inSingle = !inSingle;
     }
     return inSingle || inDouble;
+}
+
+function provideImportHover(document: any, position: any): any {
+    const lineText = document.lineAt(position.line).text;
+    const info = parseImportPathInfo(lineText);
+    if (!info) return undefined;
+    if (position.character < info.pathStart || position.character > info.pathEnd) return undefined;
+
+    const resolved = resolveAuraImport(document.uri.fsPath, info.modulePath);
+    const md = new vscode.MarkdownString(
+        resolved
+            ? `**Module** \`${info.modulePath}\`\n\nResolves to \`${resolved}\`.\n\nUse *Go to Definition* (Shift+Enter / F12 in supported IDEs).`
+            : `**Module** \`${info.modulePath}\`\n\nModule file not found from current workspace.`,
+    );
+    return new vscode.Hover(md, new vscode.Range(position.line, info.pathStart, position.line, info.pathEnd));
+}
+
+function resolveImportDefinition(document: any, position: any): string | undefined {
+    const lineText = document.lineAt(position.line).text;
+    const info = parseImportPathInfo(lineText);
+    if (info && position.character >= info.pathStart && position.character <= info.pathEnd) {
+        return resolveAuraImport(document.uri.fsPath, info.modulePath);
+    }
+
+    const wordRange = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+    if (!wordRange) return undefined;
+    const word = document.getText(wordRange);
+    const aliasMap = collectImportAliases(document, position.line);
+    const modulePath = aliasMap.get(word);
+    if (!modulePath) return undefined;
+    return resolveAuraImport(document.uri.fsPath, modulePath);
+}
+
+function buildImportDocumentLinks(document: any): any[] {
+    const links: any[] = [];
+    for (let i = 0; i < document.lineCount; i++) {
+        const lineText = document.lineAt(i).text;
+        const info = parseImportPathInfo(lineText);
+        if (!info) continue;
+        const resolved = resolveAuraImport(document.uri.fsPath, info.modulePath);
+        if (!resolved) continue;
+        const range = new vscode.Range(i, info.pathStart, i, info.pathEnd);
+        const link = new vscode.DocumentLink(range, vscode.Uri.file(resolved));
+        link.tooltip = `Open ${info.modulePath}`;
+        links.push(link);
+    }
+    return links;
+}
+
+function collectImportAliases(document: any, upToLine: number): Map<string, string> {
+    const aliases = new Map<string, string>();
+    for (let i = 0; i <= upToLine; i++) {
+        const text = document.lineAt(i).text;
+        const info = parseImportPathInfo(text);
+        if (!info) continue;
+        const fallback = info.modulePath.split('.').pop() ?? info.modulePath;
+        aliases.set(info.alias ?? fallback, info.modulePath);
+    }
+    return aliases;
+}
+
+function parseImportPathInfo(lineText: string): ImportPathInfo | undefined {
+    const noComment = lineText.replace(/#.*$/, '');
+    const m = /^\s*import\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?/.exec(noComment);
+    if (!m) return undefined;
+    const modulePath = m[1];
+    const alias = m[2];
+    const pathStart = noComment.indexOf(modulePath);
+    if (pathStart < 0) return undefined;
+    return {
+        modulePath,
+        alias,
+        pathStart,
+        pathEnd: pathStart + modulePath.length,
+    };
+}
+
+function resolveAuraImport(fromFile: string, modulePath: string): string | undefined {
+    const fromDir = path.dirname(fromFile);
+    if (modulePath.startsWith('std.')) {
+        const stdRel = modulePath.slice('std.'.length).split('.').join(path.sep) + '.aura';
+        const fromUp = findStdlibByWalkingUp(fromDir, stdRel);
+        if (fromUp) return fromUp;
+        for (const root of workspaceRoots()) {
+            const candidate = path.resolve(root, 'stdlib', stdRel);
+            if (fs.existsSync(candidate)) return candidate;
+        }
+    }
+
+    const rel = modulePath.split('.').join(path.sep) + '.aura';
+    const localCandidate = path.resolve(fromDir, rel);
+    if (fs.existsSync(localCandidate)) return localCandidate;
+    for (const root of workspaceRoots()) {
+        const candidate = path.resolve(root, rel);
+        if (fs.existsSync(candidate)) return candidate;
+    }
+    return undefined;
+}
+
+function findStdlibByWalkingUp(startDir: string, stdRel: string): string | undefined {
+    let cur = path.resolve(startDir);
+    while (true) {
+        const candidate = path.resolve(cur, 'stdlib', stdRel);
+        if (fs.existsSync(candidate)) return candidate;
+        const parent = path.dirname(cur);
+        if (parent === cur) break;
+        cur = parent;
+    }
+    return undefined;
+}
+
+function workspaceRoots(): string[] {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    return folders.map((f: any) => f.uri.fsPath);
 }
 
 function makeSimpleCompletion(label: string, kind: any, detail: string, sortGroup = '50'): any {

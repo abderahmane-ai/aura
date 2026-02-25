@@ -1,0 +1,857 @@
+module std.math
+
+let PI = 3.141592653589793
+let TAU = 6.283185307179586
+let E = 2.718281828459045
+let LN2 = 0.6931471805599453
+let LN10 = 2.302585092994046
+let EPSILON = 0.000000001
+let INF = 999999999999999999999999999999
+let NAN = sqrt(-1)
+
+# Internal helpers
+fn _assert_non_empty(values, label: String):
+    if len(values) == 0:
+        panic("math.{label} expects non-empty values")
+
+fn _pow10(decimals: Int) -> Float64:
+    if decimals < 0:
+        panic("math._pow10 expects decimals >= 0")
+    return 10 ** decimals
+
+fn _copy_list(values):
+    return to_list(values)
+
+fn _sort_numbers(values):
+    let arr = _copy_list(values)
+    return sort(arr)
+
+fn _ln_near_one(z: Float64) -> Float64:
+    let t = (z - 1.0) / (z + 1.0)
+    let t2 = t * t
+    var term = t
+    var out = 0.0
+    var k = 1
+    while k <= 41:
+        out += term / k
+        term *= t2
+        k += 2
+    return 2.0 * out
+
+# Basic numeric
+fn sign(x: Float64) -> Int:
+    if x > 0:
+        return 1
+    if x < 0:
+        return -1
+    return 0
+
+fn abs_val(x: Float64) -> Float64:
+    return abs(x)
+
+fn clamp(x: Float64, lo: Float64, hi: Float64) -> Float64:
+    if lo > hi:
+        panic("math.clamp expects lo <= hi")
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+fn copysign(magnitude: Float64, sign_source: Float64) -> Float64:
+    if sign_source < 0:
+        return -abs(magnitude)
+    return abs(magnitude)
+
+fn trunc(x: Float64) -> Int:
+    return int(x)
+
+fn floor(x: Float64) -> Int:
+    let t = int(x)
+    if x < 0 and x != t:
+        return t - 1
+    return t
+
+fn ceil(x: Float64) -> Int:
+    let t = int(x)
+    if x > 0 and x != t:
+        return t + 1
+    return t
+
+fn round(x: Float64) -> Int:
+    if x >= 0:
+        return floor(x + 0.5)
+    return ceil(x - 0.5)
+
+fn round_to(x: Float64, decimals: Int = 2) -> Float64:
+    let factor = _pow10(decimals)
+    return round(x * factor) / factor
+
+fn round_sig(x: Float64, sig: Int = 6) -> Float64:
+    if sig <= 0:
+        panic("math.round_sig expects sig > 0")
+    if x == 0:
+        return 0
+    let magnitude = floor(log10(abs(x)))
+    let scale = _pow10(sig - 1 - magnitude)
+    return round(x * scale) / scale
+
+fn is_nan(x: Float64) -> Bool:
+    return x != x
+
+fn is_finite(x: Float64) -> Bool:
+    return x == x and abs(x) < INF
+
+fn nearly_eq(a: Float64, b: Float64, eps: Float64 = 0.000000001) -> Bool:
+    let scale = max(1.0, max(abs(a), abs(b)))
+    return abs(a - b) <= eps * scale
+
+# Powers, roots, logs, exponents
+fn pow(a: Float64, b: Float64) -> Float64:
+    return a ** b
+
+fn nth_root(x: Float64, n: Int) -> Float64:
+    if n <= 0:
+        panic("math.nth_root expects n > 0")
+    if x == 0:
+        return 0
+    if x < 0 and n % 2 == 0:
+        panic("math.nth_root cannot take even root of negative number")
+    var guess = x / n
+    if guess == 0:
+        guess = 1
+    var i = 0
+    while i < 40:
+        let denom = guess ** (n - 1)
+        if denom == 0:
+            break
+        let next = ((n - 1) * guess + (x / denom)) / n
+        if nearly_eq(next, guess, 0.000000000001):
+            guess = next
+            break
+        guess = next
+        i += 1
+    return guess
+
+fn cbrt(x: Float64) -> Float64:
+    return nth_root(x, 3)
+
+fn hypot(a: Float64, b: Float64) -> Float64:
+    return sqrt(a * a + b * b)
+
+fn exp(x: Float64) -> Float64:
+    if x == 0:
+        return 1
+    if x < 0:
+        return 1.0 / exp(-x)
+    if x > 1:
+        let half = exp(x / 2.0)
+        return half * half
+    var term = 1.0
+    var out = 1.0
+    var n = 1
+    while n <= 34:
+        term = term * x / n
+        out += term
+        n += 1
+    return out
+
+fn exp2(x: Float64) -> Float64:
+    return exp(x * LN2)
+
+fn ln(x: Float64) -> Float64:
+    if x <= 0:
+        panic("math.ln expects x > 0")
+    var z = x
+    var shift = 0
+    while z > 2.0:
+        z /= 2.0
+        shift += 1
+    while z < 1.0:
+        z *= 2.0
+        shift -= 1
+    return _ln_near_one(z) + shift * LN2
+
+fn log2(x: Float64) -> Float64:
+    return ln(x) / LN2
+
+fn log10(x: Float64) -> Float64:
+    return ln(x) / LN10
+
+fn log(base: Float64, x: Float64) -> Float64:
+    if base <= 0 or base == 1:
+        panic("math.log expects base > 0 and base != 1")
+    return ln(x) / ln(base)
+
+# Angles and trigonometry
+fn degrees(rad: Float64) -> Float64:
+    return rad * 180.0 / PI
+
+fn radians(deg: Float64) -> Float64:
+    return deg * PI / 180.0
+
+fn wrap(value: Float64, lo: Float64, hi: Float64) -> Float64:
+    if hi <= lo:
+        panic("math.wrap expects hi > lo")
+    let span = hi - lo
+    var out = value
+    while out < lo:
+        out += span
+    while out >= hi:
+        out -= span
+    return out
+
+fn _wrap_pi(x: Float64) -> Float64:
+    let value = float(x)
+    return wrap(value, -PI, PI)
+
+fn sin(x: Float64) -> Float64:
+    let y = _wrap_pi(x)
+    var term = y
+    var out = y
+    var n = 1
+    while n <= 12:
+        term = -term * y * y / ((2 * n) * (2 * n + 1))
+        out += term
+        n += 1
+    return out
+
+fn cos(x: Float64) -> Float64:
+    let y = _wrap_pi(x)
+    var term = 1.0
+    var out = 1.0
+    var n = 1
+    while n <= 12:
+        term = -term * y * y / ((2 * n - 1) * (2 * n))
+        out += term
+        n += 1
+    return out
+
+fn tan(x: Float64) -> Float64:
+    return safe_div(sin(x), cos(x), 0.0)
+
+fn atan(x: Float64) -> Float64:
+    if x == 0:
+        return 0
+    if x < 0:
+        return -atan(-x)
+    if x > 1:
+        return PI / 2.0 - atan(1.0 / x)
+    var term = x
+    var out = x
+    var n = 1
+    while n <= 40:
+        term = -term * x * x
+        out += term / (2 * n + 1)
+        n += 1
+    return out
+
+fn atan2(y: Float64, x: Float64) -> Float64:
+    if x > 0:
+        return atan(y / x)
+    if x < 0 and y >= 0:
+        return atan(y / x) + PI
+    if x < 0 and y < 0:
+        return atan(y / x) - PI
+    if x == 0 and y > 0:
+        return PI / 2.0
+    if x == 0 and y < 0:
+        return -PI / 2.0
+    return 0
+
+fn asin(x: Float64) -> Float64:
+    if x < -1 or x > 1:
+        panic("math.asin expects -1 <= x <= 1")
+    return atan2(x, sqrt(max(0.0, 1.0 - x * x)))
+
+fn acos(x: Float64) -> Float64:
+    if x < -1 or x > 1:
+        panic("math.acos expects -1 <= x <= 1")
+    return PI / 2.0 - asin(x)
+
+# Hyperbolic
+fn sinh(x: Float64) -> Float64:
+    return (exp(x) - exp(-x)) / 2.0
+
+fn cosh(x: Float64) -> Float64:
+    return (exp(x) + exp(-x)) / 2.0
+
+fn tanh(x: Float64) -> Float64:
+    return safe_div(sinh(x), cosh(x), 0.0)
+
+fn asinh(x: Float64) -> Float64:
+    return ln(x + sqrt(x * x + 1.0))
+
+fn acosh(x: Float64) -> Float64:
+    if x < 1.0:
+        panic("math.acosh expects x >= 1")
+    return ln(x + sqrt((x - 1.0) * (x + 1.0)))
+
+fn atanh(x: Float64) -> Float64:
+    if x <= -1 or x >= 1:
+        panic("math.atanh expects -1 < x < 1")
+    return 0.5 * ln((1.0 + x) / (1.0 - x))
+
+# Number theory and combinatorics
+fn gcd(a: Int, b: Int) -> Int:
+    var x = int(abs(a))
+    var y = int(abs(b))
+    while y != 0:
+        let t = y
+        y = x % y
+        x = t
+    return x
+
+fn lcm(a: Int, b: Int) -> Int:
+    if a == 0 or b == 0:
+        return 0
+    return int(abs(a * b) / gcd(a, b))
+
+fn is_prime(n: Int) -> Bool:
+    if n < 2:
+        return false
+    if n == 2:
+        return true
+    if n % 2 == 0:
+        return false
+    var i = 3
+    while i * i <= n:
+        if n % i == 0:
+            return false
+        i += 2
+    return true
+
+fn next_prime(n: Int) -> Int:
+    var c = max(2, n + 1)
+    while not is_prime(c):
+        c += 1
+    return c
+
+fn factors(n: Int):
+    if n == 0:
+        panic("math.factors expects n != 0")
+    let a = int(abs(n))
+    let out = []
+    var i = 1
+    while i * i <= a:
+        if a % i == 0:
+            out.append(i)
+            let pair = int(a / i)
+            if pair != i:
+                out.append(pair)
+        i += 1
+    return sort(out)
+
+fn factorial(n: Int) -> Int:
+    if n < 0:
+        panic("math.factorial expects n >= 0")
+    var out = 1
+    for i in 2..=n:
+        out *= i
+    return out
+
+fn npr(n: Int, r: Int) -> Int:
+    if n < 0 or r < 0 or r > n:
+        panic("math.npr expects 0 <= r <= n")
+    var out = 1
+    var i = 0
+    while i < r:
+        out *= (n - i)
+        i += 1
+    return out
+
+fn ncr(n: Int, r: Int) -> Int:
+    if n < 0 or r < 0 or r > n:
+        panic("math.ncr expects 0 <= r <= n")
+    return int(factorial(n) / (factorial(r) * factorial(n - r)))
+
+# Interpolation helpers
+fn lerp(a: Float64, b: Float64, t: Float64) -> Float64:
+    return a + (b - a) * t
+
+fn inv_lerp(a: Float64, b: Float64, value: Float64) -> Float64:
+    if a == b:
+        panic("math.inv_lerp expects a != b")
+    return (value - a) / (b - a)
+
+fn remap(x: Float64, in_min: Float64, in_max: Float64, out_min: Float64, out_max: Float64) -> Float64:
+    if in_min == in_max:
+        panic("math.remap input range must be non-zero")
+    return lerp(out_min, out_max, inv_lerp(in_min, in_max, x))
+
+fn smoothstep(edge0: Float64, edge1: Float64, x: Float64) -> Float64:
+    if edge0 == edge1:
+        panic("math.smoothstep expects distinct edges")
+    let t = clamp(inv_lerp(edge0, edge1, x), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+# Practical utility functions
+fn safe_div(a: Float64, b: Float64, fallback: Float64 = 0.0) -> Float64:
+    if b == 0:
+        return fallback
+    return a / b
+
+fn percent(part: Float64, whole: Float64, fallback: Float64 = 0.0) -> Float64:
+    return safe_div(part * 100.0, whole, fallback)
+
+fn percent_change(old: Float64, now: Float64, fallback: Float64 = 0.0) -> Float64:
+    return safe_div((now - old) * 100.0, old, fallback)
+
+fn weighted_mean(values, weights, normalize: Bool = true) -> Float64:
+    let xs = _copy_list(values)
+    let ws = _copy_list(weights)
+    if len(xs) != len(ws):
+        panic("math.weighted_mean expects values and weights with same length")
+    _assert_non_empty(xs, "weighted_mean")
+    var weighted_sum = 0.0
+    var weight_sum = 0.0
+    for i in 0..len(xs):
+        let x = float(xs[i])
+        let w = float(ws[i])
+        weighted_sum += x * w
+        weight_sum += w
+    if normalize:
+        if weight_sum == 0:
+            panic("math.weighted_mean normalization requires non-zero sum(weights)")
+        return weighted_sum / weight_sum
+    return weighted_sum
+
+# Statistics
+fn sum(values) -> Float64:
+    var out = 0.0
+    for v in values:
+        out += float(v)
+    return out
+
+fn product(values) -> Float64:
+    var out = 1.0
+    for v in values:
+        out *= float(v)
+    return out
+
+fn mean(values) -> Float64:
+    _assert_non_empty(values, "mean")
+    return sum(values) / len(values)
+
+fn median(values) -> Float64:
+    return quantile(values, 0.5)
+
+fn mode(values):
+    _assert_non_empty(values, "mode")
+    let counts = HashMap()
+    for v in values:
+        let key = str(v)
+        counts.set(key, counts.get(key, 0) + 1)
+
+    var best_count = -1
+    var best_value = values[0]
+    for v in values:
+        let key = str(v)
+        let c = counts.get(key, 0)
+        if c > best_count:
+            best_count = c
+            best_value = v
+    return best_value
+
+fn variance(values, sample: Bool = false) -> Float64:
+    _assert_non_empty(values, "variance")
+    let mu = mean(values)
+    var acc = 0.0
+    for v in values:
+        let d = float(v) - mu
+        acc += d * d
+    var denom = len(values)
+    if sample:
+        denom = len(values) - 1
+    if denom <= 0:
+        panic("math.variance sample mode requires at least 2 values")
+    return acc / denom
+
+fn stddev(values, sample: Bool = false) -> Float64:
+    return sqrt(variance(values, sample))
+
+fn quantile(values, q: Float64 = 0.5) -> Float64:
+    _assert_non_empty(values, "quantile")
+    let arr = _sort_numbers(values)
+    let n = len(arr)
+    if q <= 0:
+        return float(arr[0])
+    if q >= 1:
+        return float(arr[n - 1])
+    let rank = q * (n - 1)
+    let lo = floor(rank)
+    let hi = min(lo + 1, n - 1)
+    let w = rank - lo
+    return float(arr[lo]) + (float(arr[hi]) - float(arr[lo])) * w
+
+fn percentile(values, p: Float64 = 50.0) -> Float64:
+    return quantile(values, p / 100.0)
+
+# Random helpers (deterministic with state)
+fn rng(seed: Int):
+    let safe = int(abs(seed))
+    let normalized = (safe % 2147483647) + 1
+    return HashMap("state", normalized, "mod", 2147483647, "mul", 48271)
+
+fn rand01(state) -> Float64:
+    let mod = state.get("mod", 2147483647)
+    let mul = state.get("mul", 48271)
+    let prev = state.get("state", 1)
+    var next = (prev * mul) % mod
+    if next <= 0:
+        next += mod - 1
+    state.set("state", next)
+    return next / mod
+
+fn rand(state, low: Float64 = 0.0, high: Float64 = 1.0) -> Float64:
+    if high < low:
+        panic("math.rand expects high >= low")
+    return low + rand01(state) * (high - low)
+
+fn rand_int(state, low: Int, high: Int) -> Int:
+    if high < low:
+        panic("math.rand_int expects high >= low")
+    let span = high - low + 1
+    return low + floor(rand01(state) * span)
+
+fn choice(state, values):
+    let arr = _copy_list(values)
+    _assert_non_empty(arr, "choice")
+    let idx = rand_int(state, 0, len(arr) - 1)
+    return arr[idx]
+
+fn shuffle(state, values):
+    let out = _copy_list(values)
+    let n = len(out)
+    var i = 0
+    while i < n:
+        let j = rand_int(state, i, n - 1)
+        let t = out[i]
+        out[i] = out[j]
+        out[j] = t
+        i += 1
+    return out
+
+# Sequence helpers
+fn range_linspace(start: Float64, end: Float64, n: Int):
+    if n <= 0:
+        panic("math.range_linspace expects n > 0")
+    if n == 1:
+        return [start]
+    let step = (end - start) / (n - 1)
+    let out = []
+    var i = 0
+    while i < n:
+        out.append(start + i * step)
+        i += 1
+    return out
+
+fn cum_sum(values):
+    let out = []
+    var running = 0.0
+    for v in values:
+        running += float(v)
+        out.append(running)
+    return out
+
+fn diff(values):
+    let arr = _copy_list(values)
+    if len(arr) <= 1:
+        return []
+    let out = []
+    var i = 1
+    while i < len(arr):
+        out.append(float(arr[i]) - float(arr[i - 1]))
+        i += 1
+    return out
+
+# Balance twist: rounding/splitting that preserves totals exactly.
+class Balance:
+    fn round_to_total(parts, total: Float64, decimals: Int = 2, mode: String = "largest_remainder"):
+        let xs = _copy_list(parts)
+        let n = len(xs)
+        let factor = _pow10(decimals)
+        let target = round(total * factor)
+        if n == 0:
+            if target != 0:
+                panic("math.balance.round_to_total cannot match non-zero total with empty parts")
+            return []
+
+        let raw = []
+        let rounded = []
+        var sum_rounded = 0
+        for x in xs:
+            let r = float(x) * factor
+            raw.append(r)
+            let rr = round(r)
+            rounded.append(rr)
+            sum_rounded += rr
+
+        if mode != "largest_remainder" and mode != "spread":
+            panic("math.balance.round_to_total mode must be 'largest_remainder' or 'spread'")
+
+        if mode == "spread":
+            var cursor = 0
+            while sum_rounded < target:
+                let idx = cursor % n
+                rounded[idx] = rounded[idx] + 1
+                sum_rounded += 1
+                cursor += 1
+            while sum_rounded > target:
+                let idx = cursor % n
+                rounded[idx] = rounded[idx] - 1
+                sum_rounded -= 1
+                cursor += 1
+        else:
+            while sum_rounded < target:
+                var best_i = 0
+                var best_score = -INF
+                var i = 0
+                while i < n:
+                    let score = raw[i] - rounded[i]
+                    if score > best_score:
+                        best_score = score
+                        best_i = i
+                    i += 1
+                rounded[best_i] = rounded[best_i] + 1
+                sum_rounded += 1
+
+            while sum_rounded > target:
+                var best_i = 0
+                var best_score = -INF
+                var i = 0
+                while i < n:
+                    let score = rounded[i] - raw[i]
+                    if score > best_score:
+                        best_score = score
+                        best_i = i
+                    i += 1
+                rounded[best_i] = rounded[best_i] - 1
+                sum_rounded -= 1
+
+        let out = []
+        for rr in rounded:
+            out.append(rr / factor)
+        return out
+
+    fn split(total: Float64, weights, integer: Bool = true, min_each: Float64 = 0.0):
+        let ws = _copy_list(weights)
+        let n = len(ws)
+        if n == 0:
+            return []
+        if min_each < 0:
+            panic("math.balance.split expects min_each >= 0")
+
+        let reserved = min_each * n
+        let remaining = total - reserved
+        if remaining < 0:
+            panic("math.balance.split total is smaller than min_each * count")
+
+        var weight_sum = 0.0
+        for w in ws:
+            let ww = float(w)
+            if ww < 0:
+                panic("math.balance.split weights must be non-negative")
+            weight_sum += ww
+
+        let raw = []
+        if weight_sum == 0:
+            let uniform = safe_div(remaining, n, 0.0)
+            var i = 0
+            while i < n:
+                raw.append(min_each + uniform)
+                i += 1
+        else:
+            for w in ws:
+                raw.append(min_each + remaining * float(w) / weight_sum)
+
+        if integer:
+            return self.round_to_total(raw, round(total), 0, "largest_remainder")
+        return self.round_to_total(raw, total, 6, "largest_remainder")
+
+    fn percentages(parts, decimals: Int = 2):
+        let xs = _copy_list(parts)
+        let n = len(xs)
+        if n == 0:
+            return []
+        let total = sum(xs)
+        if nearly_eq(total, 0.0, 0.000000000001):
+            let out = []
+            var i = 0
+            while i < n:
+                out.append(0.0)
+                i += 1
+            return out
+
+        let raw = []
+        for x in xs:
+            raw.append(float(x) * 100.0 / total)
+        return self.round_to_total(raw, 100.0, decimals, "largest_remainder")
+
+# Exact twist: decimal-safe helpers based on fixed precision scaling.
+class Exact:
+    fn _factor(decimals: Int = 12) -> Float64:
+        return _pow10(decimals)
+
+    fn _as_int(x: Float64, decimals: Int = 12) -> Int:
+        let factor = self._factor(decimals)
+        return round(x * factor)
+
+    fn add(a: Float64, b: Float64, decimals: Int = 12) -> Float64:
+        let ai = self._as_int(a, decimals)
+        let bi = self._as_int(b, decimals)
+        let factor = self._factor(decimals)
+        return (ai + bi) / factor
+
+    fn sub(a: Float64, b: Float64, decimals: Int = 12) -> Float64:
+        let ai = self._as_int(a, decimals)
+        let bi = self._as_int(b, decimals)
+        let factor = self._factor(decimals)
+        return (ai - bi) / factor
+
+    fn mul(a: Float64, b: Float64, decimals: Int = 12) -> Float64:
+        let ai = self._as_int(a, decimals)
+        let bi = self._as_int(b, decimals)
+        let factor = self._factor(decimals)
+        return (ai * bi) / (factor * factor)
+
+    fn div(a: Float64, b: Float64, decimals: Int = 12, fallback: Float64 = 0.0) -> Float64:
+        if b == 0:
+            return fallback
+        let factor = self._factor(decimals)
+        return round((a / b) * factor) / factor
+
+    fn round(x: Float64, decimals: Int = 2) -> Float64:
+        let factor = self._factor(decimals)
+        return round(x * factor) / factor
+
+    fn eq(a: Float64, b: Float64, decimals: Int = 12) -> Bool:
+        return self._as_int(a, decimals) == self._as_int(b, decimals)
+
+    fn money(x: Float64) -> Float64:
+        return self.round(x, 2)
+
+class ScaleModel:
+    var src_min: Float64 = 0.0
+    var src_max: Float64 = 1.0
+    var mode: String = "linear"
+    var clamp_values: Bool = true
+
+    fn init(src_min: Float64, src_max: Float64, mode: String = "linear", clamp_values: Bool = true):
+        if src_max <= src_min:
+            panic("math.scale expects max > min")
+        if mode != "linear" and mode != "robust" and mode != "log":
+            panic("math.scale mode must be linear, robust, or log")
+        if mode == "log" and (src_min <= 0 or src_max <= 0):
+            panic("math.scale log mode expects positive range")
+        self.src_min = src_min
+        self.src_max = src_max
+        self.mode = mode
+        self.clamp_values = clamp_values
+
+    fn map(x: Float64) -> Float64:
+        var t = 0.0
+        if self.mode == "log":
+            if x <= 0:
+                t = -INF
+            else:
+                let lo = log10(self.src_min)
+                let hi = log10(self.src_max)
+                t = safe_div(log10(x) - lo, hi - lo, 0.0)
+        else:
+            t = safe_div(x - self.src_min, self.src_max - self.src_min, 0.0)
+        if self.clamp_values:
+            return clamp(t, 0.0, 1.0)
+        return t
+
+    fn unmap(t: Float64) -> Float64:
+        var u = t
+        if self.clamp_values:
+            u = clamp(u, 0.0, 1.0)
+        if self.mode == "log":
+            let lo = log10(self.src_min)
+            let hi = log10(self.src_max)
+            return 10 ** (lo + (hi - lo) * u)
+        return self.src_min + (self.src_max - self.src_min) * u
+
+    fn project(values):
+        let xs = _copy_list(values)
+        let out = []
+        for x in xs:
+            out.append(self.map(float(x)))
+        return out
+
+    fn range():
+        return [self.src_min, self.src_max]
+
+fn _minmax(values):
+    let xs = _copy_list(values)
+    _assert_non_empty(xs, "scale")
+    var lo = float(xs[0])
+    var hi = float(xs[0])
+    for x in xs:
+        let v = float(x)
+        if v < lo:
+            lo = v
+        if v > hi:
+            hi = v
+    return [lo, hi]
+
+fn _positive_minmax(values):
+    let xs = _copy_list(values)
+    var found = false
+    var lo = 1.0
+    var hi = 1.0
+    for x in xs:
+        let v = float(x)
+        if v <= 0:
+            continue
+        if not found:
+            lo = v
+            hi = v
+            found = true
+        else:
+            if v < lo:
+                lo = v
+            if v > hi:
+                hi = v
+    if not found:
+        panic("math.scale log mode expects at least one positive value")
+    return [lo, hi]
+
+fn scale(values, mode: String = "linear", clamp_values: Bool = true):
+    let xs = _copy_list(values)
+    _assert_non_empty(xs, "scale")
+
+    var effective_mode = mode
+    var use_clamp = clamp_values
+    if mode == "clamped":
+        effective_mode = "linear"
+        use_clamp = true
+
+    var lo = 0.0
+    var hi = 1.0
+    if effective_mode == "linear":
+        let mm = _minmax(xs)
+        lo = mm[0]
+        hi = mm[1]
+    elif effective_mode == "robust":
+        lo = quantile(xs, 0.05)
+        hi = quantile(xs, 0.95)
+        if hi <= lo:
+            let mm = _minmax(xs)
+            lo = mm[0]
+            hi = mm[1]
+    elif effective_mode == "log":
+        let mm = _positive_minmax(xs)
+        lo = mm[0]
+        hi = mm[1]
+    else:
+        panic("math.scale mode must be linear, clamped, robust, or log")
+
+    if hi <= lo:
+        hi = lo + 1.0
+    return ScaleModel(lo, hi, effective_mode, use_clamp)
+
+let balance = Balance()
+let exact = Exact()

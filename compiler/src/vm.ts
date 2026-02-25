@@ -7,7 +7,7 @@ import {
     makeBuiltins, auraToString, isTruthy,
     getInstanceAttr, getModuleAttr, makeIterator, iterNext, DONE,
 } from './builtins.js';
-import { runtimeError } from './errors.js';
+import { AuraError, runtimeError, StackFrame } from './errors.js';
 
 interface NativeHeapData {
     items: Value[];
@@ -26,6 +26,8 @@ interface CallFrame {
     locals: Map<string, Value>;
     receiver?: AuraInstance;
     constructing?: AuraInstance;
+    fnName?: string;
+    file?: string;
 }
 
 export class VM {
@@ -39,55 +41,80 @@ export class VM {
 
     run(chunk: Chunk): Value {
         this.pushFrame(chunk, new Map(), undefined);
-        return this.execute();
+        return this.execute(0);
     }
 
-    private execute(): Value {
-        while (true) {
+    setGlobal(name: string, value: Value): void {
+        this.globals.set(name, value);
+    }
+
+    getGlobal(name: string): Value | undefined {
+        return this.globals.get(name);
+    }
+
+    hasGlobal(name: string): boolean {
+        return this.globals.has(name);
+    }
+
+    private execute(untilDepth: number): Value {
+        while (this.frames.length > untilDepth) {
             const frame = this.frames[this.frames.length - 1];
-            if (!frame || frame.ip >= frame.chunk.code.length) return null;
+            if (!frame) break;
+            if (frame.ip >= frame.chunk.code.length) {
+                this.frames.pop();
+                const out: Value = null;
+                if (this.frames.length === untilDepth) return out;
+                this.push(out);
+                continue;
+            }
             const instr = frame.chunk.code[frame.ip++];
-
-            switch (instr.op) {
-                case 'HALT': return this.stack.pop() ?? null;
-
-                case 'PUSH_CONST': this.push(frame.chunk.constants[instr.arg as number]); break;
-                case 'PUSH_TRUE': this.push(true); break;
-                case 'PUSH_FALSE': this.push(false); break;
-                case 'PUSH_NIL': this.push(null); break;
-
-                case 'POP': this.pop(); break;
-                case 'DUP': this.push(this.peek()); break;
-                case 'SWAP': { const a = this.pop(); const b = this.pop(); this.push(a); this.push(b); break; }
-
-                case 'DEFINE_GLOBAL': this.globals.set(instr.arg as string, this.pop()); break;
-                case 'GET_GLOBAL': {
-                    const name = instr.arg as string;
-                    if (!this.globals.has(name)) runtimeError(`Undefined name '${name}'`);
-                    this.push(this.globals.get(name)!);
-                    break;
-                }
-                case 'SET_GLOBAL': this.globals.set(instr.arg as string, this.pop()); break;
-                case 'GET_LOCAL': {
-                    const name = instr.arg as string;
-                    if (name === 'self' && frame.receiver) { this.push(frame.receiver); break; }
-                    if (!frame.locals.has(name)) {
-                        if (this.globals.has(name)) { this.push(this.globals.get(name)!); break; }
-                        runtimeError(`Undefined local '${name}'`);
+            try {
+                switch (instr.op) {
+                    case 'HALT': {
+                        this.frames.pop();
+                        const out = this.stack.pop() ?? null;
+                        if (this.frames.length === untilDepth) return out;
+                        this.push(out);
+                        break;
                     }
-                    this.push(frame.locals.get(name)!);
-                    break;
-                }
-                case 'SET_LOCAL': frame.locals.set(instr.arg as string, this.pop()); break;
 
-                case 'ADD': { const b = this.pop(), a = this.pop(); this.push(this.add(a, b)); break; }
-                case 'SUB': { const b = this.pop(), a = this.pop(); this.push(this.sub(a, b)); break; }
-                case 'MUL': { const b = this.pop(), a = this.pop(); this.push(this.mul(a, b)); break; }
-                case 'DIV': { const b = this.pop(), a = this.pop(); this.push(this.div(a, b)); break; }
-                case 'MOD': { const b = this.pop(), a = this.pop(); this.push((a as number) % (b as number)); break; }
-                case 'POW': { const b = this.pop(), a = this.pop(); this.push(Math.pow(a as number, b as number)); break; }
-                case 'NEG': { const a = this.pop(); this.push(-(a as number)); break; }
-                case 'CONCAT': { const b = this.pop(), a = this.pop(); this.push(String(a) + String(b)); break; }
+                    case 'PUSH_CONST': this.push(frame.chunk.constants[instr.arg as number]); break;
+                    case 'PUSH_TRUE': this.push(true); break;
+                    case 'PUSH_FALSE': this.push(false); break;
+                    case 'PUSH_NIL': this.push(null); break;
+
+                    case 'POP': this.pop(); break;
+                    case 'DUP': this.push(this.peek()); break;
+                    case 'SWAP': { const a = this.pop(); const b = this.pop(); this.push(a); this.push(b); break; }
+
+                    case 'DEFINE_GLOBAL': this.globals.set(instr.arg as string, this.pop()); break;
+                    case 'GET_GLOBAL': {
+                        const name = instr.arg as string;
+                        if (!this.globals.has(name)) runtimeError(`Undefined name '${name}'`);
+                        this.push(this.globals.get(name)!);
+                        break;
+                    }
+                    case 'SET_GLOBAL': this.globals.set(instr.arg as string, this.pop()); break;
+                    case 'GET_LOCAL': {
+                        const name = instr.arg as string;
+                        if (name === 'self' && frame.receiver) { this.push(frame.receiver); break; }
+                        if (!frame.locals.has(name)) {
+                            if (this.globals.has(name)) { this.push(this.globals.get(name)!); break; }
+                            runtimeError(`Undefined local '${name}'`);
+                        }
+                        this.push(frame.locals.get(name)!);
+                        break;
+                    }
+                    case 'SET_LOCAL': frame.locals.set(instr.arg as string, this.pop()); break;
+
+                    case 'ADD': { const b = this.pop(), a = this.pop(); this.push(this.add(a, b)); break; }
+                    case 'SUB': { const b = this.pop(), a = this.pop(); this.push(this.sub(a, b)); break; }
+                    case 'MUL': { const b = this.pop(), a = this.pop(); this.push(this.mul(a, b)); break; }
+                    case 'DIV': { const b = this.pop(), a = this.pop(); this.push(this.div(a, b)); break; }
+                    case 'MOD': { const b = this.pop(), a = this.pop(); this.push((a as number) % (b as number)); break; }
+                    case 'POW': { const b = this.pop(), a = this.pop(); this.push(Math.pow(a as number, b as number)); break; }
+                    case 'NEG': { const a = this.pop(); this.push(-(a as number)); break; }
+                    case 'CONCAT': { const b = this.pop(), a = this.pop(); this.push(String(a) + String(b)); break; }
 
                 case 'EQ': { const b = this.pop(), a = this.pop(); this.push(this.equal(a, b)); break; }
                 case 'NEQ': { const b = this.pop(), a = this.pop(); this.push(!this.equal(a, b)); break; }
@@ -198,15 +225,14 @@ export class VM {
                     this.callValue(callee, args);
                     break;
                 }
-                case 'RETURN': {
-                    const retVal = this.pop();
-                    const doneFrame = this.frames.pop();
-                    if (!doneFrame) return retVal;
-                    const out = doneFrame.constructing ?? retVal;
-                    if (this.frames.length === 0) return out;
-                    this.push(out);
-                    break;
-                }
+                    case 'RETURN': {
+                        const retVal = this.pop();
+                        const doneFrame = this.frames.pop();
+                        const out = doneFrame?.constructing ?? retVal;
+                        if (this.frames.length === untilDepth) return out;
+                        this.push(out);
+                        break;
+                    }
 
                 case 'CALL_METHOD': {
                     const [method, countStr] = (instr.arg as string).split(':');
@@ -248,10 +274,14 @@ export class VM {
                     break;
                 }
 
-                default:
-                    runtimeError(`Unknown opcode: ${(instr as any).op}`);
+                    default:
+                        runtimeError(`Unknown opcode: ${(instr as any).op}`);
+                }
+            } catch (err) {
+                this.rethrowWithStack(err, instr.line);
             }
         }
+        return null;
     }
 
     private callValue(callee: Value, args: Value[]): void {
@@ -305,6 +335,21 @@ export class VM {
             return;
         }
         runtimeError(`'${method}' is not callable on ${auraToString(obj)}`);
+    }
+
+    private invokeCallable(callee: Value, args: Value[]): Value {
+        if ((callee as any)?.type === 'builtin') {
+            return (callee as BuiltinFn).fn(args);
+        }
+        if ((callee as any)?.type === 'function') {
+            const fn = callee as AuraFunction;
+            const locals = this.buildLocals(fn, args);
+            if (fn.receiver) locals.set('self', fn.receiver);
+            const baseDepth = this.frames.length;
+            this.pushFrame(fn.chunk, locals, fn.receiver);
+            return this.execute(baseDepth);
+        }
+        runtimeError(`Expected callable, got ${auraToString(callee)}`);
     }
 
     private buildLocals(fn: AuraFunction, args: Value[]): Map<string, Value> {
@@ -367,6 +412,21 @@ export class VM {
                 sum: () => list.items.reduce<number>((acc, v) => acc + this.asNumber(v, 'list.sum'), 0),
                 append: () => ({ type: 'builtin', name: 'append', fn: ([v]: Value[]) => { list.items.push(v); return null; } } as BuiltinFn),
                 push: () => ({ type: 'builtin', name: 'push', fn: ([v]: Value[]) => { list.items.push(v); return null; } } as BuiltinFn),
+                map: () => ({ type: 'builtin', name: 'map', fn: ([fn]: Value[]) => {
+                    const out: Value[] = [];
+                    for (let i = 0; i < list.items.length; i++) {
+                        out.push(this.invokeCallable(fn, [list.items[i], i, list]));
+                    }
+                    return { type: 'list', items: out } as AuraList;
+                } } as BuiltinFn),
+                filter: () => ({ type: 'builtin', name: 'filter', fn: ([fn]: Value[]) => {
+                    const out: Value[] = [];
+                    for (let i = 0; i < list.items.length; i++) {
+                        const item = list.items[i];
+                        if (isTruthy(this.invokeCallable(fn, [item, i, list]))) out.push(item);
+                    }
+                    return { type: 'list', items: out } as AuraList;
+                } } as BuiltinFn),
             };
             if (attr in listMethods) {
                 const v = listMethods[attr]();
@@ -878,8 +938,50 @@ export class VM {
         return false;
     }
 
+    private rethrowWithStack(err: unknown, line: number): never {
+        if (err instanceof AuraError && err.phase === 'Runtime') {
+            const stackTrace = (err.stackTrace && err.stackTrace.length > 0)
+                ? err.stackTrace
+                : this.buildStackTrace(line);
+            const top = stackTrace[0];
+            throw new AuraError(
+                err.message,
+                top?.file ?? err.file,
+                top?.line ?? line,
+                0,
+                'Runtime',
+                stackTrace,
+            );
+        }
+        throw err;
+    }
+
+    private buildStackTrace(currentLine: number): StackFrame[] {
+        const trace: StackFrame[] = [];
+        for (let i = this.frames.length - 1; i >= 0; i--) {
+            const frame = this.frames[i];
+            const line = i === this.frames.length - 1
+                ? currentLine
+                : (frame.chunk.code[Math.max(0, frame.ip - 1)]?.line ?? 0);
+            trace.push({
+                functionName: frame.fnName ?? frame.chunk.name ?? '<anon>',
+                file: frame.file ?? frame.chunk.file ?? '<runtime>',
+                line,
+            });
+        }
+        return trace;
+    }
+
     private pushFrame(chunk: Chunk, locals: Map<string, Value>, receiver?: AuraInstance, constructing?: AuraInstance): void {
-        this.frames.push({ chunk, ip: 0, locals, receiver, constructing });
+        this.frames.push({
+            chunk,
+            ip: 0,
+            locals,
+            receiver,
+            constructing,
+            fnName: chunk.name,
+            file: chunk.file,
+        });
     }
 
     private push(v: Value): void { this.stack.push(v); }

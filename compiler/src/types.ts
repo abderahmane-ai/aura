@@ -141,6 +141,7 @@ export interface Instruction {
 
 export interface Chunk {
     name: string;
+    file?: string;
     code: Instruction[];
     constants: Value[];
 }

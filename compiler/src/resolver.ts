@@ -40,6 +40,8 @@ export class Resolver {
                 return;
 
             case 'ImportStmt':
+                this.declare(node.alias ?? this.importBindingName(node.path));
+                return;
             case 'ModuleStmt':
             case 'EnumDecl':
             case 'InterfaceDecl':
@@ -280,5 +282,10 @@ export class Resolver {
 
     private fail(msg: string, line: number): never {
         compileError(msg, this.file, line);
+    }
+
+    private importBindingName(path: string): string {
+        const parts = path.split('.');
+        return parts[parts.length - 1];
     }
 }

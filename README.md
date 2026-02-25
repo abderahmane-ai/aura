@@ -24,11 +24,13 @@ Aura is an audited, experimental programming language built as a creative R&D pr
 - `constraint`: semantic validated types.
 - `unit` + `measure`: dimensional/unit-aware values.
 - `indexed`: in-memory collection with automatic key indexes.
+- `math` module: complete classical math + practical helpers + twists (`math.balance`, `math.exact`, `math.scale`).
 - Native collections: `Stack`, `Queue`, `LinkedList`, `HashMap`, `TreeMap`, `Heap`.
 
 ## Repository Layout
 
 - `compiler/`: lexer, parser, resolver, compiler, VM, CLI (`aura`, `aurac`)
+- `stdlib/`: standard Aura modules (for now: `std.math`)
 - `editor/vscode/`: syntax highlighting, snippets, icon theme, non-LSP IntelliSense
 - `examples/`: language demos by topic
 - `docs/`: install, syntax, tooling, architecture notes
@@ -91,7 +93,6 @@ fn main():
 - [Syntax Quickstart](./docs/SYNTAX_QUICKSTART.md)
 - [Tooling](./docs/TOOLING.md)
 - [Performance Notes](./docs/PERFORMANCE.md)
-- [Architecture Notes](./docs/COMPILER.md)
 - [Spec Draft](./docs/SPEC.md)
 
 ## Contributing

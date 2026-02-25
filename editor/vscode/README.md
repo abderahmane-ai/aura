@@ -7,6 +7,7 @@ This extension provides Aura editor support without LSP:
 - Snippets for Aura syntax/features
 - IntelliSense completions (keywords, builtins, snippets, collection methods, cadence clauses)
 - Hover docs for Aura keywords
+- Go to Definition / clickable import links for Aura modules (including `std.*` to `stdlib/`)
 
 It also applies Aura-specific editor defaults so suggestions feel like a real language mode (not plain text word suggestions).
 

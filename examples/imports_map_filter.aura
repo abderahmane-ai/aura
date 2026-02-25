@@ -1,0 +1,33 @@
+import std.math as math
+
+fn main():
+    let values = [1, 2, 3, 4, 5]
+    let doubled = values.map(fn(x) = x * 2)
+    let evens = doubled.filter(fn(x) = x % 4 == 0)
+    let clamped = math.clamp(42, 0, 10)
+    let lerped = math.lerp(10, 20, 0.25)
+    let combos = math.ncr(10, 3)
+    let p90 = math.percentile(values, 90)
+
+    io.println("clamp(42, 0, 10)={clamped}")
+    io.println("lerp(10, 20, 0.25)={lerped}")
+    io.println("ncr(10, 3)={combos}")
+    io.println("p90={p90}")
+    io.println("doubled={doubled}")
+    io.println("evens={evens}")
+
+    let safe = math.safe_div(10, 0, -1)
+    let pct = math.percent(45, 120)
+    let growth = math.percent_change(80, 100)
+    let weighted = math.weighted_mean([90, 70], [0.7, 0.3])
+    let balanced = math.balance.round_to_total([33.333, 33.333, 33.333], 100, 2)
+    let exact_sum = math.exact.add(0.1, 0.2, 6)
+    let exact_equal = math.exact.eq(0.1 + 0.2, 0.3, 6)
+    let scaler = math.scale([2, 3, 3, 4, 200], "robust", true)
+    let scale_4 = scaler.map(4)
+    let scale_200 = scaler.map(200)
+    io.println("safe_div={safe} percent={pct} growth={growth}")
+    io.println("weighted_mean={weighted}")
+    io.println("balance.round_to_total={balanced}")
+    io.println("exact.add(0.1,0.2)={exact_sum} exact.eq={exact_equal}")
+    io.println("scale robust: map(4)={scale_4} map(200)={scale_200}")
