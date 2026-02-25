@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: compiler/package-lock.json
+
+      - name: Install Compiler Dependencies
+        working-directory: compiler
+        run: npm ci
+
+      - name: Build Compiler
+        working-directory: compiler
+        run: npm run build
+
+      - name: Check Aura Examples
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $failed = $false
+          Get-ChildItem -Path .\examples -Filter *.aura | ForEach-Object {
+            node .\compiler\dist\main.js check $_.FullName
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+          if ($failed) { throw "One or more .aura examples failed check." }
+
+      - name: Build VSIX
+        working-directory: editor/vscode
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\build-vsix.ps1

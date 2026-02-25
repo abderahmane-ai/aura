@@ -1,0 +1,105 @@
+{
+    "name": "aura-lang",
+    "displayName": "Aura Language",
+    "description": "Syntax highlighting, language support, and tooling for the Aura programming language.",
+    "version": "0.1.0",
+    "publisher": "aura-lang",
+    "license": "MIT",
+    "main": "./out/extension.js",
+    "engines": {
+        "vscode": "^1.74.0"
+    },
+    "activationEvents": [
+        "onLanguage:aura"
+    ],
+    "categories": [
+        "Programming Languages"
+    ],
+    "icon": "images/aura-icon.png",
+    "contributes": {
+        "languages": [
+            {
+                "id": "aura",
+                "aliases": [
+                    "Aura",
+                    "aura"
+                ],
+                "extensions": [
+                    ".aura"
+                ],
+                "configuration": "./language-configuration.json",
+                "icon": {
+                    "light": "./images/aura-icon.png",
+                    "dark": "./images/aura-icon.png"
+                }
+            }
+        ],
+        "grammars": [
+            {
+                "language": "aura",
+                "scopeName": "source.aura",
+                "path": "./syntaxes/aura.tmLanguage.json"
+            }
+        ],
+        "iconThemes": [
+            {
+                "id": "aura-icons",
+                "label": "Aura File Icons",
+                "path": "./icon-theme.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "aura",
+                "path": "./snippets/aura.json"
+            }
+        ],
+        "taskDefinitions": [
+            {
+                "type": "aura",
+                "required": [
+                    "command"
+                ],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The aura CLI command to run (build, run, test, fmt, lint)."
+                    }
+                }
+            }
+        ],
+        "problemMatchers": [
+            {
+                "name": "aura",
+                "owner": "aura",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}"
+                ],
+                "pattern": {
+                    "regexp": "^error\\[(\\w+)\\]:\\s+(.+)\\s+-->\\s+(.+):(\\d+):(\\d+)$",
+                    "severity": 1,
+                    "message": 2,
+                    "file": 3,
+                    "line": 4,
+                    "column": 5
+                }
+            }
+        ],
+        "configurationDefaults": {
+            "[aura]": {
+                "editor.wordBasedSuggestions": "off",
+                "editor.suggest.showWords": false,
+                "editor.suggest.showSnippets": true,
+                "editor.suggest.snippetsPreventQuickSuggestions": false,
+                "editor.suggestSelection": "first",
+                "editor.tabSize": 4,
+                "editor.insertSpaces": true
+            }
+        }
+    },
+    "scripts": {
+        "build": "node ../../compiler/node_modules/typescript/bin/tsc -p ./tsconfig.json",
+        "package": "powershell -ExecutionPolicy Bypass -File ./scripts/build-vsix.ps1"
+    }
+}

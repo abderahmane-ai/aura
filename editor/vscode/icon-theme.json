@@ -1,0 +1,10 @@
+{
+    "iconDefinitions": {
+        "aura-file-icon": {
+            "iconPath": "./images/aura-icon.png"
+        }
+    },
+    "fileExtensions": {
+        "aura": "aura-file-icon"
+    }
+}

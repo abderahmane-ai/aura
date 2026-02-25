@@ -1,0 +1,94 @@
+facet Editor:
+    let permissions = ["read", "write"]
+
+    fn annotate(note: String):
+        io.println("Editor note: {note} perms={self.permissions}")
+
+    fn grant(permission: String):
+        self.permissions.append(permission)
+
+class BankAccount:
+    let owner: String
+    var balance: Int = 0
+
+    fn init(owner: String, initial_balance: Int = 0):
+        self.owner = owner
+        self.balance = initial_balance
+
+    fn deposit(amount: Int):
+        self.balance += amount
+
+    fn withdraw(amount: Int):
+        if amount > self.balance:
+            io.println("Insufficient funds for {self.owner}")
+            return
+        self.balance -= amount
+
+    fn transfer_to(target: BankAccount, amount: Int):
+        if amount > self.balance:
+            io.println("Transfer blocked for {self.owner}")
+            return
+        self.balance -= amount
+        target.deposit(amount)
+
+    fn get_balance() -> Int:
+        return self.balance
+
+    fn summary() -> String:
+        return "{self.owner}: balance={self.balance}"
+
+class SavingsAccount:
+    let account: BankAccount
+    var rate: Float64 = 0.05
+
+    fn init(owner: String, initial_balance: Int, rate: Float64 = 0.05):
+        self.account = BankAccount(owner, initial_balance)
+        self.rate = rate
+
+    fn add_interest():
+        let bonus = int(self.account.get_balance() * self.rate)
+        self.account.deposit(bonus)
+
+    fn summary() -> String:
+        return "Savings<{self.account.summary()}>, rate={self.rate}"
+
+class TeamMember:
+    let name: String
+    adopts Editor
+
+    fn init(name: String):
+        self.name = name
+
+    fn summary() -> String:
+        return "TeamMember<{self.name}>"
+
+fn main():
+    io.println("=== Classes and OOP ===")
+
+    let primary = BankAccount("Maya", 1200)
+    let backup = BankAccount("Nora", 400)
+
+    primary.deposit(300)
+    primary.withdraw(250)
+    primary.transfer_to(backup, 200)
+
+    primary.with("owner", "Maya Prime")
+    io.println(primary.summary())
+    io.println(backup.summary())
+
+    let cloned_primary = primary.clone()
+    cloned_primary.with("owner", "Maya Copy")
+    cloned_primary.deposit(100)
+    io.println(cloned_primary.summary())
+
+    let savings = SavingsAccount("Ibrahim", 2000, 0.08)
+    savings.add_interest()
+    savings.account.with("owner", "Ibrahim Saver")
+    io.println(savings.summary())
+
+    let member = TeamMember("Alex")
+    io.println(member.summary())
+    as member: Editor:
+        member.annotate("Draft ready")
+        member.grant("publish")
+        member.annotate("Publishing")

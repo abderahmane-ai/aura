@@ -1,0 +1,81 @@
+unit Time:
+    base: ms
+    sec = ms * 1000
+    min = sec * 60
+
+constraint Price(value: Float64):
+    require value >= 0
+    require value < 1000000
+
+constraint DiscountRate(value: Float64):
+    require value >= 0
+    require value <= 1
+
+fn apply_discount(price: Price, rate: DiscountRate) -> Float64:
+    return price * (1 - rate)
+
+fn main():
+    io.println("=== Data Types ===")
+
+    # Numeric literals
+    let decimal_int: Int = 42
+    let big_int = 1_000_000
+    let hex_value = 0x2A
+    let binary_value = 0b101010
+    let pi: Float64 = 3.14159
+
+    # Booleans
+    let ready = true
+    let failed = false
+
+    # Strings, chars, interpolation
+    let letter = 'A'
+    let language = "Aura"
+    let greeting = "Hello from {language}"
+
+    # nil
+    let optional_value = nil
+
+    # Lists
+    let scores = [10, 20, 30]
+    io.println("scores={scores} len={scores.len()} first={scores.first()} last={scores.last()} sum={scores.sum()}")
+    scores[1] = 99
+    scores.append(40)
+    io.println("scores (mutated)={scores}")
+
+    # Maps
+    let user = {"id": 1001, "name": "Maya", "admin": true}
+    let user_name = user["name"]
+    user["role"] = "owner"
+    io.println("user={user} user_name={user_name}")
+
+    # Tuple syntax (runtime currently represents tuple as list)
+    let point = (12, 24, 36)
+
+    # Conversions
+    let number_as_text = str(decimal_int)
+    let parsed_int = int("123")
+    let parsed_float = float("19.75")
+
+    # Basic comparisons and logical ops
+    let is_equal = decimal_int == hex_value
+    let is_large = big_int > 500_000 and not failed
+
+    # Constraints + measures
+    let timeout: measure Time = 5sec
+    let delay: measure Time = 500ms
+    let total_time: measure Time = timeout + delay
+    let price: Price = 1200
+    let rate: DiscountRate = 0.15
+    let final_price = apply_discount(price, rate)
+
+    io.println("decimal_int={decimal_int} big_int={big_int}")
+    io.println("hex={hex_value} binary={binary_value} pi={pi}")
+    io.println("ready={ready} failed={failed}")
+    io.println("letter={letter} greeting={greeting}")
+    io.println("optional_value={optional_value}")
+    io.println("point={point}")
+    io.println("str/int/float -> {number_as_text}, {parsed_int}, {parsed_float}")
+    io.println("is_equal={is_equal} is_large={is_large}")
+    io.println("total_time={total_time}")
+    io.println("price={price} rate={rate} final_price={final_price}")

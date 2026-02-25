@@ -1,0 +1,32 @@
+{
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"", "notIn": ["string"] },
+    { "open": "'", "close": "'", "notIn": ["string"] }
+  ],
+  "surroundingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"" },
+    { "open": "'", "close": "'" }
+  ],
+  "folding": {
+    "offSide": true
+  },
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(fn|if|elif|else|for|while|repeat|cadence|as|start|first|each|between|last|empty|constraint|unit|facet|class|struct|interface|trait|impl|enum|match|case|async\\s+fn|actor|select|try|catch)\\b.*:\\s*$",
+    "decreaseIndentPattern": "^\\s*(elif|else|case|catch)\\b"
+  },
+  "wordPattern": "[a-zA-Z_][a-zA-Z0-9_]*"
+}

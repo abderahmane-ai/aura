@@ -1,0 +1,63 @@
+fn main():
+    io.println("=== Loops ===")
+
+    io.println("for range (exclusive):")
+    for i in 1..5:
+        io.println("  i={i}")
+
+    io.println("for range (inclusive):")
+    for i in 1..=5:
+        io.println("  i={i}")
+
+    io.println("for over list:")
+    let items = ["alpha", "beta", "gamma"]
+    for item in items:
+        io.println("  item={item}")
+
+    io.println("for over map (iterates keys):")
+    let tags = {"core": 1, "ui": 2, "api": 3}
+    for key in tags:
+        io.println("  key={key}")
+
+    io.println("repeat without index:")
+    repeat 3:
+        io.println("  repeated")
+
+    io.println("repeat with index:")
+    repeat 4 as step:
+        io.println("  step={step}")
+
+    io.println("cadence loop (non-empty):")
+    cadence word in items:
+        start:
+            io.print("  sequence: ")
+        first:
+            io.print("[first]")
+        each:
+            io.print("{word}")
+        between:
+            io.print(" -> ")
+        last:
+            io.println(" [last]")
+        empty:
+            io.println("  <empty>")
+
+    io.println("cadence loop (empty):")
+    let no_items = []
+    cadence item in no_items:
+        each:
+            io.println("  should not print: {item}")
+        empty:
+            io.println("  empty branch executed")
+
+    io.println("while + break + continue:")
+    var x = 0
+    while true:
+        x += 1
+        if x == 2:
+            continue
+        if x == 6:
+            break
+        io.println("  x={x}")
+
+    io.println("done")

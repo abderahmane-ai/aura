@@ -1,0 +1,25 @@
+{
+    "name": "aurac",
+    "version": "0.1.0",
+    "description": "Aura language bytecode compiler and VM",
+    "type": "module",
+    "bin": {
+        "aurac": "./dist/main.js",
+        "aura": "./dist/main.js"
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "check:all": "npm run build && powershell -NoProfile -Command \"$failed = $false; Get-ChildItem -Path ../examples -Filter *.aura | ForEach-Object { node dist/main.js check $_.FullName; if ($LASTEXITCODE -ne 0) { $failed = $true } }; if ($failed) { exit 1 }\"",
+        "run:data_types": "npm run build && node dist/main.js run ../examples/data_types.aura",
+        "run:loops": "npm run build && node dist/main.js run ../examples/loops.aura",
+        "run:functions": "npm run build && node dist/main.js run ../examples/functions.aura",
+        "run:interfaces": "npm run build && node dist/main.js run ../examples/interfaces.aura",
+        "run:classes_oop": "npm run build && node dist/main.js run ../examples/classes_oop.aura",
+        "run:native_data_structures": "npm run build && node dist/main.js run ../examples/native_data_structures.aura"
+    },
+    "devDependencies": {
+        "tsx": "^4.7.1",
+        "typescript": "^5.4.0",
+        "@types/node": "^20.0.0"
+    }
+}

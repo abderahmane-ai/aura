@@ -1,0 +1,46 @@
+fn add(a: Int, b: Int) -> Int:
+    return a + b
+
+fn mul(a: Int, b: Int) -> Int = a * b
+
+fn power(base: Int, exp: Int = 2) -> Int:
+    var result = 1
+    for i in 1..=exp:
+        result *= base
+    return result
+
+fn factorial(n: Int) -> Int:
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+fn apply_twice(x: Int, fn_ref) -> Int:
+    return fn_ref(fn_ref(x))
+
+fn describe_user(name: String, age: Int = 18):
+    io.println("User: {name}, age: {age}")
+
+fn main():
+    io.println("=== Functions ===")
+
+    io.println("add(7, 5) = {add(7, 5)}")
+    io.println("mul(4, 6) = {mul(4, 6)}")
+
+    io.println("power(4) = {power(4)}")
+    io.println("power(3, 4) = {power(3, 4)}")
+
+    io.println("factorial(6) = {factorial(6)}")
+
+    describe_user("Ada")
+    describe_user("Linus", 33)
+
+    let inc = fn(x: Int) = x + 1
+    let triple = fn(x: Int) = x * 3
+    io.println("inc(10) = {inc(10)}")
+    io.println("triple(7) = {triple(7)}")
+
+    let twice_inc = apply_twice(10, inc)
+    io.println("apply_twice(10, inc) = {twice_inc}")
+
+    let piped = 5 |> inc
+    io.println("5 |> inc = {piped}")

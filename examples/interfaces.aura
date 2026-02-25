@@ -1,0 +1,68 @@
+interface Drivable:
+    fn accelerate(amount: Int)
+    fn brake(amount: Int)
+    fn current_speed() -> Int
+
+trait Honkable:
+    fn horn_label() -> String = "beep"
+
+    fn honk():
+        io.println("Horn: {self.horn_label()}")
+
+class Scooter:
+    var speed: Int = 0
+    let name: String = "City Scooter"
+
+    fn init():
+        self.speed = 0
+
+impl Drivable for Scooter:
+    fn accelerate(amount: Int):
+        self.speed += amount
+
+    fn brake(amount: Int):
+        let next = self.speed - amount
+        self.speed = max(0, next)
+
+    fn current_speed() -> Int:
+        return self.speed
+
+impl Honkable for Scooter:
+    fn horn_label() -> String = "scooter-beep"
+
+class Bike:
+    var speed: Int = 0
+
+    fn init():
+        self.speed = 0
+
+impl Drivable for Bike:
+    fn accelerate(amount: Int):
+        self.speed += amount
+
+    fn brake(amount: Int):
+        self.speed = max(0, self.speed - amount)
+
+    fn current_speed() -> Int:
+        return self.speed
+
+impl Honkable for Bike:
+    fn horn_label() -> String = "bike-beep"
+
+fn test_drive(vehicle):
+    vehicle.accelerate(15)
+    vehicle.accelerate(10)
+    vehicle.brake(8)
+    io.println("speed now: {vehicle.current_speed()}")
+    vehicle.honk()
+
+fn main():
+    io.println("=== Interfaces and Traits ===")
+
+    let scooter = Scooter()
+    io.println("testing scooter")
+    test_drive(scooter)
+
+    let bike = Bike()
+    io.println("testing bike")
+    test_drive(bike)

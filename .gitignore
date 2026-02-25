@@ -1,0 +1,28 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node / package managers
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build artifacts
+compiler/dist/
+editor/vscode/out/
+editor/vscode/.vsix-build/
+editor/vscode/*.vsix
+release/
+*.zip
+
+# Local caches / temp
+editor/vscode/.npm-cache/
+*.tmp
+.permission_check.tmp
+
+# IDE/editor
+.idea/
+.vscode/
+*.code-workspace

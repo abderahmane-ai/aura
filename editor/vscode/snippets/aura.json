@@ -1,0 +1,245 @@
+{
+  "Aura Function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:params})${3: -> ReturnType}:",
+      "    ${0}"
+    ],
+    "description": "Define a function"
+  },
+  "Aura Main": {
+    "prefix": "main",
+    "body": [
+      "fn main():",
+      "    ${0}"
+    ],
+    "description": "Main entry point"
+  },
+  "Aura If/Elif/Else": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition}:",
+      "    ${2}",
+      "elif ${3:other_condition}:",
+      "    ${4}",
+      "else:",
+      "    ${0}"
+    ],
+    "description": "Conditional branch"
+  },
+  "Aura For Loop": {
+    "prefix": "for",
+    "body": [
+      "for ${1:item} in ${2:collection}:",
+      "    ${0}"
+    ],
+    "description": "For-in loop"
+  },
+  "Aura While Loop": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition}:",
+      "    ${0}"
+    ],
+    "description": "While loop"
+  },
+  "Aura Repeat Loop": {
+    "prefix": "repeat",
+    "body": [
+      "repeat ${1:count} as ${2:i}:",
+      "    ${0}"
+    ],
+    "description": "Aura counted loop"
+  },
+  "Aura Cadence Loop": {
+    "prefix": "cadence",
+    "body": [
+      "cadence ${1:item} in ${2:collection}:",
+      "    start:",
+      "        ${3}",
+      "    each:",
+      "        ${4}",
+      "    between:",
+      "        ${5}",
+      "    last:",
+      "        ${6}",
+      "    empty:",
+      "        ${0}"
+    ],
+    "description": "Context-aware iteration with phase hooks"
+  },
+  "Aura Class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name}:",
+      "    var ${2:field}: ${3:Type} = ${4:nil}",
+      "",
+      "    fn init(${2:field}: ${3:Type}):",
+      "        self.${2:field} = ${2:field}",
+      "",
+      "    ${0}"
+    ],
+    "description": "Define a class"
+  },
+  "Aura Interface": {
+    "prefix": "interface",
+    "body": [
+      "interface ${1:Name}:",
+      "    fn ${2:method}(${3:params})${4: -> ReturnType}",
+      "    ${0}"
+    ],
+    "description": "Define an interface"
+  },
+  "Aura Trait": {
+    "prefix": "trait",
+    "body": [
+      "trait ${1:Name}:",
+      "    fn ${2:method}(${3:params})${4: -> ReturnType}:",
+      "        ${0}"
+    ],
+    "description": "Define a trait with default implementation"
+  },
+  "Aura Impl Block": {
+    "prefix": "impl",
+    "body": [
+      "impl ${1:Interface} for ${2:Type}:",
+      "    fn ${3:method}(${4:params})${5: -> ReturnType}:",
+      "        ${0}"
+    ],
+    "description": "Implement an interface for a type"
+  },
+  "Aura Match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:value}:",
+      "    case ${2:.ok(v)}:",
+      "        ${3}",
+      "    case ${4:_}:",
+      "        ${0}"
+    ],
+    "description": "Pattern match expression"
+  },
+  "Aura Facet": {
+    "prefix": "facet",
+    "body": [
+      "facet ${1:RoleName}:",
+      "    fn ${2:ability}(${3:params}):",
+      "        ${0}"
+    ],
+    "description": "Define a facet capability set"
+  },
+  "Aura Adopts": {
+    "prefix": "adopts",
+    "body": [
+      "class ${1:Type}:",
+      "    adopts ${2:Facet}",
+      "    ${0}"
+    ],
+    "description": "Attach a facet to a class"
+  },
+  "Aura As Context": {
+    "prefix": "as",
+    "body": [
+      "as ${1:obj}: ${2:Facet}:",
+      "    ${0}"
+    ],
+    "description": "Activate facet context"
+  },
+  "Aura Constraint": {
+    "prefix": "constraint",
+    "body": [
+      "constraint ${1:TypeName}(value: ${2:Float64}):",
+      "    require ${3:value >= 0}",
+      "    ${0}"
+    ],
+    "description": "Validated semantic type"
+  },
+  "Aura Unit": {
+    "prefix": "unit",
+    "body": [
+      "unit ${1:Time}:",
+      "    base: ${2:ms}",
+      "    ${3:sec} = ${2:ms} * ${4:1000}",
+      "    ${0}"
+    ],
+    "description": "Declare a unit dimension"
+  },
+  "Aura Measure": {
+    "prefix": "measure",
+    "body": [
+      "let ${1:timeout}: measure ${2:Time} = ${3:5sec}",
+      "${0}"
+    ],
+    "description": "Declare a unit-aware value"
+  },
+  "Aura Indexed Collection": {
+    "prefix": "indexed",
+    "body": [
+      "indexed ${1:users} by ${2:id}, ${3:email}",
+      "${1:users}.push({\"${2:id}\": ${4:1}, \"${3:email}\": \"${5:user@test.com}\", \"name\": \"${6:Alex}\"})",
+      "let ${7:user} = ${1:users}.get(${8:\"user@test.com\"})",
+      "${0}"
+    ],
+    "description": "Create an indexed collection with auto-maintained keys"
+  },
+  "Aura Stack": {
+    "prefix": "stack",
+    "body": [
+      "let ${1:s} = Stack(${2:1}, ${3:2}, ${4:3})",
+      "${1:s}.push(${5:4})",
+      "let ${6:top} = ${1:s}.peek()",
+      "${0}"
+    ],
+    "description": "Stack usage"
+  },
+  "Aura Queue": {
+    "prefix": "queue",
+    "body": [
+      "let ${1:q} = Queue(${2:\"a\"}, ${3:\"b\"})",
+      "${1:q}.enqueue(${4:\"c\"})",
+      "let ${5:next} = ${1:q}.dequeue()",
+      "${0}"
+    ],
+    "description": "Queue usage"
+  },
+  "Aura LinkedList": {
+    "prefix": "linkedlist",
+    "body": [
+      "let ${1:ll} = LinkedList(${2:1}, ${3:2})",
+      "${1:ll}.push_back(${4:3})",
+      "${1:ll}.push_front(${5:0})",
+      "${0}"
+    ],
+    "description": "Linked list usage"
+  },
+  "Aura HashMap": {
+    "prefix": "hashmap",
+    "body": [
+      "let ${1:hm} = HashMap(${2:\"a\"}, ${3:1}, ${4:\"b\"}, ${5:2})",
+      "${1:hm}.set(${6:\"c\"}, ${7:3})",
+      "let ${8:value} = ${1:hm}.get(${9:\"a\"})",
+      "${0}"
+    ],
+    "description": "Hash map usage"
+  },
+  "Aura TreeMap": {
+    "prefix": "treemap",
+    "body": [
+      "let ${1:tm} = TreeMap(${2:\"b\"}, ${3:2}, ${4:\"a\"}, ${5:1})",
+      "${1:tm}.set(${6:\"c\"}, ${7:3})",
+      "let ${8:sorted_keys} = ${1:tm}.keys()",
+      "${0}"
+    ],
+    "description": "Sorted tree map usage"
+  },
+  "Aura Heap": {
+    "prefix": "heap",
+    "body": [
+      "let ${1:h} = Heap(${2:5}, ${3:1}, ${4:9})",
+      "${1:h}.push(${5:2})",
+      "let ${6:min_value} = ${1:h}.pop()",
+      "${0}"
+    ],
+    "description": "Min-heap usage"
+  }
+}
