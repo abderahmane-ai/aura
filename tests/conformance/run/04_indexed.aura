@@ -1,0 +1,13 @@
+import std.io as io
+fn main():
+    indexed users by id, email
+    users.push({"id": 1, "email": "a@test.com", "name": "Ada"})
+    users.push({"id": 2, "email": "b@test.com", "name": "Bea"})
+
+    let user2 = users.get_by("id", 2)
+    users.set_by("id", 2, "email", "new@test.com")
+    let has_new = users.has("new@test.com")
+    let name = user2["name"]
+
+    io.println("len={users.len()} name={name} has_new={has_new}")
+

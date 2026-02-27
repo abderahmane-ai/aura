@@ -1,3 +1,4 @@
+import std.io as io
 interface Drivable:
     fn accelerate(amount: Int)
     fn brake(amount: Int)
@@ -66,3 +67,4 @@ fn main():
     let bike = Bike()
     io.println("testing bike")
     test_drive(bike)
+

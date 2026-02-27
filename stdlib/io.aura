@@ -1,0 +1,126 @@
+module std.io
+
+import std.time as time
+
+fn print(value):
+    __io_write(value)
+
+fn println(value):
+    __io_writeln(value)
+
+fn eprint(value):
+    __io_write_err(value)
+
+fn eprintln(value):
+    __io_writeln_err(value)
+
+fn write(values, sep: String = "", ending: String = ""):
+    __io_write(sep.join(to_list(values)))
+    if ending.len() > 0:
+        __io_write(ending)
+
+fn writeln(values, sep: String = " "):
+    write(values, sep, "\n")
+
+fn print_many(values):
+    for value in to_list(values):
+        __io_write(value)
+
+fn println_many(values):
+    for value in to_list(values):
+        __io_writeln(value)
+
+fn repeat_text(char: String, count: Int) -> String:
+    return char.repeat(count)
+
+fn line(width: Int = 60, fill: String = "-") -> String:
+    if fill.len() == 0:
+        fill = "-"
+    return fill.repeat(width)
+
+fn hline(width: Int = 60, fill: String = "-"):
+    println(line(width, fill))
+
+fn banner(title: String, width: Int = 60, fill: String = "="):
+    let bar = line(width, fill)
+    println(bar)
+    println(title)
+    println(bar)
+
+fn kv(key: String, value):
+    println("{key}: {value}")
+
+fn read_line(prompt_text: String = "") -> String:
+    return __io_read_line(prompt_text)
+
+fn prompt(prompt_text: String = "") -> String:
+    return read_line(prompt_text)
+
+fn read_all_stdin() -> String:
+    return __io_read_all_stdin()
+
+fn read_lines_stdin():
+    return read_all_stdin().split("\n")
+
+fn yes_no(question: String, default_yes: Bool = true) -> Bool:
+    let suffix = " [y/n]: "
+    if default_yes:
+        suffix = " [Y/n]: "
+    else:
+        suffix = " [y/N]: "
+    let answer = read_line("{question}{suffix}").trim().lower()
+    if answer.len() == 0:
+        return default_yes
+    if answer == "y" or answer == "yes" or answer == "true" or answer == "1":
+        return true
+    if answer == "n" or answer == "no" or answer == "false" or answer == "0":
+        return false
+    return default_yes
+
+fn timestamp() -> String:
+    return time.now_iso()
+
+fn log(level: String, message: String):
+    println("[{timestamp()}] [{level.upper()}] {message}")
+
+fn info(message: String):
+    log("info", message)
+
+fn warn(message: String):
+    log("warn", message)
+
+fn error(message: String):
+    log("error", message)
+
+fn debug(message: String):
+    log("debug", message)
+
+fn table(rows, separator: String = " | "):
+    let data = to_list(rows)
+    if data.len() == 0:
+        println("(empty)")
+        return
+
+    let widths = []
+    let first_row = to_list(data[0])
+    for cell in first_row:
+        widths.push(str(cell).len())
+
+    for row in data:
+        let cells = to_list(row)
+        for i in 0..cells.len():
+            let cell_len = str(cells[i]).len()
+            if i >= widths.len():
+                widths.push(cell_len)
+            elif cell_len > widths[i]:
+                widths[i] = cell_len
+
+    for row in data:
+        let cells = to_list(row)
+        let out = []
+        for i in 0..widths.len():
+            let value = ""
+            if i < cells.len():
+                value = str(cells[i])
+            out.push(value.pad_right(widths[i], " "))
+        println(separator.join(out))

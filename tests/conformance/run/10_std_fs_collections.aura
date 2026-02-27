@@ -1,0 +1,39 @@
+import std.io as io
+import std.fs as fs
+import std.collections as col
+
+fn main():
+    let dir = "tests/_tmp_std_pro"
+    fs.delete(dir)
+    fs.mkdir(dir, true)
+
+    let a = fs.join([dir, "a.txt"])
+    let b = fs.join([dir, "b.txt"])
+    let c = fs.join([dir, "c.txt"])
+
+    fs.write_lines(a, ["one", "two"], false)
+    fs.copy(a, b, true)
+    fs.append_lines(b, ["three"], false)
+    fs.move(b, c, true)
+
+    let files = fs.list_files(dir, false)
+    let walked = fs.walk(dir, true)
+    let a_size = fs.size(a)
+    let c_lines = fs.read_lines(c)
+    let bname = fs.basename("x/y/z.txt")
+    let ext = fs.extname("z.txt")
+
+    let u = col.union([1, 2, 2], [2, 3])
+    let inter = col.intersection([1, 2, 3], [2, 4, 3])
+    let diff = col.difference([1, 2, 3], [2])
+    let grouped = col.group_count_by([1, 2, 3, 4], fn(x: Int) = x % 2)
+    let part = col.partition([1, 2, 3, 4], fn(x: Int) = x % 2 == 0)
+    let pairs = col.pairs({"a": 1, "b": 2})
+
+    io.println("files={files} walked={walked} a_size={a_size}")
+    io.println("c_lines={c_lines} bname={bname} ext={ext}")
+    io.println("u={u} inter={inter} diff={diff}")
+    io.println("grouped={grouped} part={part} pairs={pairs}")
+
+    fs.delete(dir)
+

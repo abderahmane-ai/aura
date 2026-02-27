@@ -26,6 +26,7 @@ Aura is an audited, experimental programming language built as a creative R&D pr
 - `indexed`: in-memory collection with automatic key indexes.
 - `math` module: complete classical math + practical helpers + twists (`math.balance`, `math.exact`, `math.scale`).
 - Native collections: `Stack`, `Queue`, `LinkedList`, `HashMap`, `TreeMap`, `Heap`.
+- Practical stdlib MVP modules: `std.io`, `std.fs`, `std.json`, `std.time`, `std.collections`.
 
 ## Repository Layout
 
@@ -91,9 +92,18 @@ fn main():
 
 - [Install Guide](./docs/INSTALL.md)
 - [Syntax Quickstart](./docs/SYNTAX_QUICKSTART.md)
+- [Stdlib Reference](./docs/STDLIB.md)
 - [Tooling](./docs/TOOLING.md)
+- [Implementation Plan](./docs/IMPLEMENTATION_PLAN.md)
 - [Performance Notes](./docs/PERFORMANCE.md)
 - [Spec Draft](./docs/SPEC.md)
+
+## Quality Gates
+
+```powershell
+cd .\compiler
+npm run check:strict
+```
 
 ## Contributing
 

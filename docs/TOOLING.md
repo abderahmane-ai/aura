@@ -25,6 +25,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-vsix.ps1
 
 Install the generated `editor/vscode/aura-lang-0.1.0.vsix` in any VS Code-compatible IDE that supports VSIX extensions.
 
+### 0.1 Current Quality Gates
+
+From `compiler/`:
+
+```powershell
+npm run check:strict
+```
+
+This runs:
+- `check:all` (compiler build + all examples compile-check)
+- `check:conformance` (`tests/conformance` golden tests + expected failures)
+
 ---
 
 ## 1. Language Server Protocol (LSP)

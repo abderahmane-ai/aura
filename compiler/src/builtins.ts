@@ -3,6 +3,9 @@ import {
     AuraFunction, AuraClass, AuraInstance, AuraEnum, AuraModule, BuiltinFn, AuraMeasure,
 } from './types.js';
 import { runtimeError } from './errors.js';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename as pathBasename, dirname as pathDirname, extname as pathExtname, isAbsolute, join as pathJoin, normalize as pathNormalize, resolve as pathResolve } from 'node:path';
+import { tmpdir } from 'node:os';
 
 interface NativeHeapData {
     items: Value[];
@@ -172,6 +175,159 @@ function mapFromArgs(args: Value[]): Map<string, Value> {
     return out;
 }
 
+function jsToValue(input: unknown): Value {
+    if (input === null || input === undefined) return null;
+    if (typeof input === 'boolean' || typeof input === 'number' || typeof input === 'string') return input;
+    if (Array.isArray(input)) return { type: 'list', items: input.map((v) => jsToValue(v)) } as AuraList;
+    if (typeof input === 'object') {
+        const entries = new Map<string, Value>();
+        for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+            entries.set(k, jsToValue(v));
+        }
+        return { type: 'map', entries } as AuraMap;
+    }
+    return auraToString(input as Value);
+}
+
+function valueToJs(input: Value): unknown {
+    if (input === null || typeof input === 'boolean' || typeof input === 'number' || typeof input === 'string') return input;
+    if ((input as any).type === 'list') return (input as AuraList).items.map((v) => valueToJs(v));
+    if ((input as any).type === 'map') {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of (input as AuraMap).entries.entries()) out[k] = valueToJs(v);
+        return out;
+    }
+    if ((input as any).type === 'enum') {
+        const e = input as AuraEnum;
+        return { tag: e.tag, values: e.values.map((v) => valueToJs(v)) };
+    }
+    if ((input as any).type === 'measure') {
+        const m = input as AuraMeasure;
+        return { dimension: m.dimension, value: m.baseValue / m.factor, unit: m.unit };
+    }
+    if ((input as any).type === 'native') {
+        const n = input as AuraNative;
+        if (n.kind === 'hashmap' || n.kind === 'tree') {
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of (n.data as Map<string, Value>).entries()) out[k] = valueToJs(v);
+            return out;
+        }
+        if (Array.isArray(n.data)) return n.data.map((v: Value) => valueToJs(v));
+    }
+    return auraToString(input);
+}
+
+function mapOf(entries: Array<[string, Value]>): AuraMap {
+    return { type: 'map', entries: new Map(entries) };
+}
+
+function mapValueOf(entries: Array<[string, Value]>): Value {
+    return { type: 'map', entries: new Map(entries) } as AuraMap;
+}
+
+function listValueOf(items: Value[]): Value {
+    return { type: 'list', items } as AuraList;
+}
+
+function readLineSync(prompt: string): string {
+    if (prompt.length > 0) process.stdout.write(prompt);
+    const chunks: number[] = [];
+    const buf = Buffer.alloc(1);
+    while (true) {
+        const read = readSync(0, buf, 0, 1, null);
+        if (read <= 0) break;
+        const b = buf[0];
+        if (b === 10) break; // \n
+        if (b !== 13) chunks.push(b); // ignore \r
+    }
+    return Buffer.from(chunks).toString('utf8');
+}
+
+function parseJsonPath(path: string): Array<string | number> {
+    const tokens: Array<string | number> = [];
+    let i = 0;
+    let current = '';
+    while (i < path.length) {
+        const ch = path[i];
+        if (ch === '.') {
+            if (current.length > 0) tokens.push(current);
+            current = '';
+            i++;
+            continue;
+        }
+        if (ch === '[') {
+            if (current.length > 0) tokens.push(current);
+            current = '';
+            const end = path.indexOf(']', i + 1);
+            if (end < 0) runtimeError('Invalid json path: missing ]');
+            const content = path.slice(i + 1, end).trim();
+            const num = parseInt(content, 10);
+            if (!Number.isNaN(num) && String(num) === content) tokens.push(num);
+            else tokens.push(content.replace(/^['"]|['"]$/g, ''));
+            i = end + 1;
+            continue;
+        }
+        current += ch;
+        i++;
+    }
+    if (current.length > 0) tokens.push(current);
+    return tokens;
+}
+
+function jsonPathGet(root: Value, path: string): { found: boolean; value: Value } {
+    const tokens = parseJsonPath(path);
+    let cur: Value = root;
+    for (const token of tokens) {
+        if (typeof token === 'number') {
+            if ((cur as any)?.type !== 'list') return { found: false, value: null };
+            const list = (cur as AuraList).items;
+            const idx = token < 0 ? list.length + token : token;
+            if (idx < 0 || idx >= list.length) return { found: false, value: null };
+            cur = list[idx];
+            continue;
+        }
+        if ((cur as any)?.type === 'map') {
+            const m = cur as AuraMap;
+            if (!m.entries.has(token)) return { found: false, value: null };
+            cur = m.entries.get(token)!;
+            continue;
+        }
+        if ((cur as any)?.type === 'native') {
+            const n = cur as AuraNative;
+            if ((n.kind === 'hashmap' || n.kind === 'tree') && (n.data as Map<string, Value>).has(token)) {
+                cur = (n.data as Map<string, Value>).get(token)!;
+                continue;
+            }
+        }
+        return { found: false, value: null };
+    }
+    return { found: true, value: cur };
+}
+
+function sleepMs(ms: number): void {
+    const duration = Math.max(0, Math.trunc(ms));
+    if (duration === 0) return;
+    const sab = new SharedArrayBuffer(4);
+    const arr = new Int32Array(sab);
+    Atomics.wait(arr, 0, 0, duration);
+}
+
+function some(value: Value): AuraEnum {
+    return { type: 'enum', tag: 'some', values: [value] };
+}
+
+function none(): AuraEnum {
+    return { type: 'enum', tag: 'none', values: [] };
+}
+
+function ok(value: Value): AuraEnum {
+    return { type: 'enum', tag: 'ok', values: [value] };
+}
+
+function err(value: Value): AuraEnum {
+    return { type: 'enum', tag: 'error', values: [value] };
+}
+
 export function auraToString(v: Value): string {
     if (v === null) return 'nil';
     if (typeof v === 'boolean') return v ? 'true' : 'false';
@@ -183,7 +339,11 @@ export function auraToString(v: Value): string {
         const pairs = [...m.entries.entries()].map(([k, val]) => `"${k}": ${auraToString(val)}`);
         return '{' + pairs.join(', ') + '}';
     }
-    if ((v as any).type === 'enum') { const e = v as AuraEnum; return `.${e.tag}(${e.values.map(auraToString).join(', ')})`; }
+    if ((v as any).type === 'enum') {
+        const e = v as AuraEnum;
+        if (e.values.length === 0) return `.${e.tag}`;
+        return `.${e.tag}(${e.values.map(auraToString).join(', ')})`;
+    }
     if ((v as any).type === 'function') return `<fn ${(v as AuraFunction).name}>`;
     if ((v as any).type === 'class') return `<class ${(v as AuraClass).name}>`;
     if ((v as any).type === 'instance') return `<${(v as AuraInstance).klass.name} instance>`;
@@ -227,20 +387,6 @@ function builtin(name: string, fn: (args: Value[]) => Value): BuiltinFn {
     return { type: 'builtin', name, fn };
 }
 
-export function makeIoModule(): AuraModule {
-    const attrs = new Map<string, Value>([
-        ['println', builtin('io.println', (args) => {
-            process.stdout.write(args.map(auraToString).join('') + '\n');
-            return null;
-        })],
-        ['print', builtin('io.print', (args) => {
-            process.stdout.write(args.map(auraToString).join(''));
-            return null;
-        })],
-    ]);
-    return { type: 'module', name: 'io', attrs };
-}
-
 export function makeBuiltins(): Map<string, Value> {
     const b = new Map<string, Value>();
     type UnitSymbol = { dimension: string; base: string; factor: number };
@@ -280,6 +426,356 @@ export function makeBuiltins(): Map<string, Value> {
         const m = value as AuraMeasure;
         if (m.dimension !== dimension) runtimeError(`Expected measure:${dimension}, got measure:${m.dimension}`);
         return value;
+    }));
+
+    b.set('__json_parse', builtin('__json_parse', ([text]) => {
+        if (typeof text !== 'string') runtimeError('__json_parse(text) expects a string');
+        try {
+            return jsToValue(JSON.parse(text));
+        } catch {
+            runtimeError('Invalid JSON input');
+        }
+    }));
+
+    b.set('__json_try_parse', builtin('__json_try_parse', ([text]) => {
+        if (typeof text !== 'string') runtimeError('__json_try_parse(text) expects a string');
+        try {
+            return ok(jsToValue(JSON.parse(text)));
+        } catch (e) {
+            return err(String((e as Error).message ?? 'Invalid JSON input'));
+        }
+    }));
+
+    b.set('__json_valid', builtin('__json_valid', ([text]) => {
+        if (typeof text !== 'string') runtimeError('__json_valid(text) expects a string');
+        try {
+            JSON.parse(text);
+            return true;
+        } catch {
+            return false;
+        }
+    }));
+
+    b.set('__json_stringify', builtin('__json_stringify', ([value, pretty]) => {
+        let indent = 0;
+        if (typeof pretty === 'boolean') indent = pretty ? 2 : 0;
+        else if (typeof pretty === 'number') indent = Math.max(0, Math.min(10, Math.trunc(pretty)));
+        else if (pretty !== undefined && pretty !== null) runtimeError('__json_stringify(value, pretty?) expects bool or number for pretty');
+        return JSON.stringify(valueToJs(value ?? null), null, indent);
+    }));
+
+    b.set('__json_typeof', builtin('__json_typeof', ([value]) => {
+        if (value === null || value === undefined) return 'null';
+        if (typeof value === 'string') return 'string';
+        if (typeof value === 'number') return 'number';
+        if (typeof value === 'boolean') return 'boolean';
+        if ((value as any)?.type === 'list') return 'array';
+        if ((value as any)?.type === 'map' || ((value as any)?.type === 'native' && (((value as AuraNative).kind === 'hashmap') || ((value as AuraNative).kind === 'tree')))) {
+            return 'object';
+        }
+        return 'other';
+    }));
+
+    b.set('__json_get_path', builtin('__json_get_path', ([root, path, fallback]) => {
+        if (typeof path !== 'string') runtimeError('__json_get_path(value, path, fallback?) expects path string');
+        const out = jsonPathGet(root ?? null, path);
+        return out.found ? out.value : (fallback ?? null);
+    }));
+
+    b.set('__json_has_path', builtin('__json_has_path', ([root, path]) => {
+        if (typeof path !== 'string') runtimeError('__json_has_path(value, path) expects path string');
+        return jsonPathGet(root ?? null, path).found;
+    }));
+
+    b.set('__fs_exists', builtin('__fs_exists', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_exists(path) expects a string path');
+        return existsSync(path);
+    }));
+
+    b.set('__fs_read', builtin('__fs_read', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_read(path) expects a string path');
+        try {
+            return readFileSync(path, 'utf8');
+        } catch (e) {
+            runtimeError(`fs.read failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_write', builtin('__fs_write', ([path, content]) => {
+        if (typeof path !== 'string' || typeof content !== 'string') runtimeError('__fs_write(path, content) expects (string, string)');
+        try {
+            writeFileSync(path, content, 'utf8');
+            return null;
+        } catch (e) {
+            runtimeError(`fs.write failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_append', builtin('__fs_append', ([path, content]) => {
+        if (typeof path !== 'string' || typeof content !== 'string') runtimeError('__fs_append(path, content) expects (string, string)');
+        try {
+            appendFileSync(path, content, 'utf8');
+            return null;
+        } catch (e) {
+            runtimeError(`fs.append failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_delete', builtin('__fs_delete', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_delete(path) expects a string path');
+        try {
+            rmSync(path, { force: true, recursive: true });
+            return null;
+        } catch (e) {
+            runtimeError(`fs.delete failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_mkdir', builtin('__fs_mkdir', ([path, recursive]) => {
+        if (typeof path !== 'string') runtimeError('__fs_mkdir(path, recursive?) expects a string path');
+        if (recursive !== undefined && recursive !== null && typeof recursive !== 'boolean') runtimeError('__fs_mkdir(path, recursive?) recursive must be bool');
+        try {
+            mkdirSync(path, { recursive: recursive === undefined || recursive === null ? true : recursive });
+            return null;
+        } catch (e) {
+            runtimeError(`fs.mkdir failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_list', builtin('__fs_list', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_list(path) expects a string path');
+        try {
+            return { type: 'list', items: readdirSync(path).sort((a, c) => a.localeCompare(c)) } as AuraList;
+        } catch (e) {
+            runtimeError(`fs.list failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_stat', builtin('__fs_stat', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_stat(path) expects a string path');
+        if (!existsSync(path)) {
+            return mapOf([
+                ['exists', false],
+                ['is_file', false],
+                ['is_dir', false],
+                ['size', 0],
+                ['mtime_ms', 0],
+            ]);
+        }
+        try {
+            const st = statSync(path);
+            return mapOf([
+                ['exists', true],
+                ['is_file', st.isFile()],
+                ['is_dir', st.isDirectory()],
+                ['size', st.size],
+                ['mtime_ms', st.mtimeMs],
+            ]);
+        } catch (e) {
+            runtimeError(`fs.stat failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_copy', builtin('__fs_copy', ([src, dst, overwrite]) => {
+        if (typeof src !== 'string' || typeof dst !== 'string') runtimeError('__fs_copy(src, dst, overwrite?) expects (string, string, bool?)');
+        const canOverwrite = overwrite === undefined || overwrite === null ? true : Boolean(overwrite);
+        if (!canOverwrite && existsSync(dst)) runtimeError(`fs.copy failed: destination exists '${dst}'`);
+        try {
+            copyFileSync(src, dst);
+            return null;
+        } catch (e) {
+            runtimeError(`fs.copy failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_move', builtin('__fs_move', ([src, dst, overwrite]) => {
+        if (typeof src !== 'string' || typeof dst !== 'string') runtimeError('__fs_move(src, dst, overwrite?) expects (string, string, bool?)');
+        const canOverwrite = overwrite === undefined || overwrite === null ? true : Boolean(overwrite);
+        if (!canOverwrite && existsSync(dst)) runtimeError(`fs.move failed: destination exists '${dst}'`);
+        if (canOverwrite && existsSync(dst)) rmSync(dst, { recursive: true, force: true });
+        try {
+            renameSync(src, dst);
+            return null;
+        } catch (e) {
+            runtimeError(`fs.move failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_cwd', builtin('__fs_cwd', (args) => {
+        if (args.length !== 0) runtimeError('__fs_cwd() takes no arguments');
+        return process.cwd();
+    }));
+
+    b.set('__fs_abs', builtin('__fs_abs', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_abs(path) expects path string');
+        return isAbsolute(path) ? pathNormalize(path) : pathResolve(process.cwd(), path);
+    }));
+
+    b.set('__fs_join', builtin('__fs_join', (args) => {
+        const parts: string[] = [];
+        if (args.length === 1 && (args[0] as any)?.type === 'list') {
+            for (const item of (args[0] as AuraList).items) parts.push(auraToString(item));
+        } else {
+            for (const arg of args) parts.push(auraToString(arg));
+        }
+        if (parts.length === 0) return '';
+        return pathNormalize(pathJoin(...parts));
+    }));
+
+    b.set('__fs_basename', builtin('__fs_basename', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_basename(path) expects path string');
+        return pathBasename(path);
+    }));
+
+    b.set('__fs_dirname', builtin('__fs_dirname', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_dirname(path) expects path string');
+        return pathDirname(path);
+    }));
+
+    b.set('__fs_extname', builtin('__fs_extname', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_extname(path) expects path string');
+        return pathExtname(path);
+    }));
+
+    b.set('__fs_normalize', builtin('__fs_normalize', ([path]) => {
+        if (typeof path !== 'string') runtimeError('__fs_normalize(path) expects path string');
+        return pathNormalize(path);
+    }));
+
+    b.set('__fs_walk', builtin('__fs_walk', ([root, recursive]) => {
+        if (typeof root !== 'string') runtimeError('__fs_walk(path, recursive?) expects path string');
+        const walkRecursive = recursive === undefined || recursive === null ? true : Boolean(recursive);
+        if (!existsSync(root)) return listValueOf([]);
+        const out: Value[] = [];
+        const visit = (dir: string, prefix: string) => {
+            const entries = readdirSync(dir, { withFileTypes: true }).sort((a, c) => a.name.localeCompare(c.name));
+            for (const entry of entries) {
+                const rel = prefix.length > 0 ? `${prefix}/${entry.name}` : entry.name;
+                out.push(rel);
+                if (walkRecursive && entry.isDirectory()) visit(pathJoin(dir, entry.name), rel);
+            }
+        };
+        try {
+            visit(root, '');
+            return listValueOf(out);
+        } catch (e) {
+            runtimeError(`fs.walk failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__fs_temp_dir', builtin('__fs_temp_dir', ([prefix]) => {
+        const p = prefix === undefined || prefix === null ? 'aura-' : auraToString(prefix);
+        return mkdtempSync(pathJoin(tmpdir(), p));
+    }));
+
+    b.set('__io_write_err', builtin('__io_write_err', (args) => {
+        process.stderr.write(args.map(auraToString).join(''));
+        return null;
+    }));
+
+    b.set('__io_write', builtin('__io_write', (args) => {
+        process.stdout.write(args.map(auraToString).join(''));
+        return null;
+    }));
+
+    b.set('__io_writeln', builtin('__io_writeln', (args) => {
+        process.stdout.write(args.map(auraToString).join('') + '\n');
+        return null;
+    }));
+
+    b.set('__io_writeln_err', builtin('__io_writeln_err', (args) => {
+        process.stderr.write(args.map(auraToString).join('') + '\n');
+        return null;
+    }));
+
+    b.set('__io_read_line', builtin('__io_read_line', ([prompt]) => {
+        if (prompt !== undefined && prompt !== null && typeof prompt !== 'string') runtimeError('__io_read_line(prompt?) expects prompt string');
+        return readLineSync(prompt ?? '');
+    }));
+
+    b.set('__io_read_all_stdin', builtin('__io_read_all_stdin', (args) => {
+        if (args.length !== 0) runtimeError('__io_read_all_stdin() takes no arguments');
+        try {
+            return readFileSync(0, 'utf8');
+        } catch (e) {
+            runtimeError(`io.read_all_stdin failed: ${String((e as Error).message ?? e)}`);
+        }
+    }));
+
+    b.set('__time_now_ms', builtin('__time_now_ms', (args) => {
+        if (args.length !== 0) runtimeError('__time_now_ms() takes no arguments');
+        return Date.now();
+    }));
+
+    b.set('__time_now_unix_s', builtin('__time_now_unix_s', (args) => {
+        if (args.length !== 0) runtimeError('__time_now_unix_s() takes no arguments');
+        return Math.floor(Date.now() / 1000);
+    }));
+
+    b.set('__time_iso_now', builtin('__time_iso_now', (args) => {
+        if (args.length !== 0) runtimeError('__time_iso_now() takes no arguments');
+        return new Date().toISOString();
+    }));
+
+    b.set('__time_monotonic_ms', builtin('__time_monotonic_ms', (args) => {
+        if (args.length !== 0) runtimeError('__time_monotonic_ms() takes no arguments');
+        return Number(process.hrtime.bigint() / BigInt(1_000_000));
+    }));
+
+    b.set('__time_sleep_ms', builtin('__time_sleep_ms', ([ms]) => {
+        if (typeof ms !== 'number') runtimeError('__time_sleep_ms(ms) expects a number');
+        sleepMs(ms);
+        return null;
+    }));
+
+    b.set('__time_parse_iso', builtin('__time_parse_iso', ([text]) => {
+        if (typeof text !== 'string') runtimeError('__time_parse_iso(text) expects a string');
+        const v = Date.parse(text);
+        if (Number.isNaN(v)) runtimeError('Invalid ISO datetime');
+        return v;
+    }));
+
+    b.set('__time_from_unix_ms', builtin('__time_from_unix_ms', ([ms]) => {
+        if (typeof ms !== 'number') runtimeError('__time_from_unix_ms(ms) expects a number');
+        return new Date(ms).toISOString();
+    }));
+
+    b.set('__time_from_unix_s', builtin('__time_from_unix_s', ([sec]) => {
+        if (typeof sec !== 'number') runtimeError('__time_from_unix_s(sec) expects a number');
+        return new Date(sec * 1000).toISOString();
+    }));
+
+    b.set('__time_to_unix_s', builtin('__time_to_unix_s', ([ms]) => {
+        if (typeof ms !== 'number') runtimeError('__time_to_unix_s(ms) expects a number');
+        return Math.floor(ms / 1000);
+    }));
+
+    b.set('__time_parts', builtin('__time_parts', ([ms]) => {
+        const ts = ms === undefined || ms === null ? Date.now() : asNumber(ms, '__time_parts');
+        const d = new Date(ts);
+        return mapValueOf([
+            ['year', d.getUTCFullYear()],
+            ['month', d.getUTCMonth() + 1],
+            ['day', d.getUTCDate()],
+            ['hour', d.getUTCHours()],
+            ['minute', d.getUTCMinutes()],
+            ['second', d.getUTCSeconds()],
+            ['ms', d.getUTCMilliseconds()],
+            ['weekday', d.getUTCDay()],
+            ['iso', d.toISOString()],
+            ['unix_ms', d.getTime()],
+            ['unix_s', Math.floor(d.getTime() / 1000)],
+        ]);
+    }));
+
+    b.set('__time_add_ms', builtin('__time_add_ms', ([ms, delta]) => {
+        if (typeof ms !== 'number' || typeof delta !== 'number') runtimeError('__time_add_ms(ms, delta) expects numbers');
+        return ms + delta;
+    }));
+
+    b.set('__time_diff_ms', builtin('__time_diff_ms', ([a, c]) => {
+        if (typeof a !== 'number' || typeof c !== 'number') runtimeError('__time_diff_ms(a, b) expects numbers');
+        return a - c;
     }));
 
     b.set('len', builtin('len', ([v]) => {
@@ -336,7 +832,38 @@ export function makeBuiltins(): Map<string, Value> {
         return { type: 'range', start, end, inclusive: false } as AuraRange;
     }));
 
-    b.set('io', makeIoModule());
+    b.set('Option', builtin('Option', (args) => {
+        if (args.length > 1) runtimeError('Option(value?) accepts at most one argument');
+        if (args.length === 0 || args[0] === null) return none();
+        return some(args[0]);
+    }));
+    b.set('Some', builtin('Some', ([value]) => {
+        if (value === undefined) runtimeError('Some(value) requires one argument');
+        return some(value);
+    }));
+    b.set('None', builtin('None', (args) => {
+        if (args.length !== 0) runtimeError('None() takes no arguments');
+        return none();
+    }));
+
+    b.set('Result', builtin('Result', ([value, errorValue]) => {
+        if (value === undefined && errorValue === undefined) runtimeError('Result(value, error?) requires at least one argument');
+        if (errorValue !== undefined && errorValue !== null) return err(errorValue);
+        return ok(value ?? null);
+    }));
+    b.set('Ok', builtin('Ok', ([value]) => {
+        if (value === undefined) runtimeError('Ok(value) requires one argument');
+        return ok(value);
+    }));
+    b.set('Err', builtin('Err', ([value]) => {
+        if (value === undefined) runtimeError('Err(value) requires one argument');
+        return err(value);
+    }));
+
+    b.set('is_some', builtin('is_some', ([v]) => (v as any)?.type === 'enum' && (v as AuraEnum).tag === 'some'));
+    b.set('is_none', builtin('is_none', ([v]) => (v as any)?.type === 'enum' && (v as AuraEnum).tag === 'none'));
+    b.set('is_ok', builtin('is_ok', ([v]) => (v as any)?.type === 'enum' && (v as AuraEnum).tag === 'ok'));
+    b.set('is_err', builtin('is_err', ([v]) => (v as any)?.type === 'enum' && (v as AuraEnum).tag === 'error'));
 
     b.set('List', builtin('List', (args) => ({ type: 'list', items: [...args] } as AuraList)));
     b.set('Stack', builtin('Stack', (args) => ({ type: 'native', kind: 'stack', data: [...args] } as AuraNative)));

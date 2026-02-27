@@ -1,0 +1,11 @@
+import std.io as io
+trait Renderable:
+    fn render()
+
+class Card:
+    let title: String = "x"
+
+impl Renderable for Card:
+    fn render():
+        io.println(self.title)
+

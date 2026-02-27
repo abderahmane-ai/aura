@@ -22,20 +22,9 @@ jobs:
         working-directory: compiler
         run: npm ci
 
-      - name: Build Compiler
+      - name: Run Strict Aura Checks
         working-directory: compiler
-        run: npm run build
-
-      - name: Check Aura Examples
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $failed = $false
-          Get-ChildItem -Path .\examples -Filter *.aura | ForEach-Object {
-            node .\compiler\dist\main.js check $_.FullName
-            if ($LASTEXITCODE -ne 0) { $failed = $true }
-          }
-          if ($failed) { throw "One or more .aura examples failed check." }
+        run: npm run check:strict
 
       - name: Build VSIX
         working-directory: editor/vscode

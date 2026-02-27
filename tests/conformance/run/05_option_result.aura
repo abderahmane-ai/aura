@@ -1,0 +1,14 @@
+import std.io as io
+fn safe_div(a: Float64, b: Float64):
+    if b == 0:
+        return Err("zero")
+    return Ok(a / b)
+
+fn main():
+    let a = Some(10).map(fn(x: Int) = x + 5).unwrap_or(0)
+    let b = None().or(7).unwrap_or(0)
+    let c = None().ok_or("missing")
+    let d = safe_div(8, 0).recover(fn(msg: String) = 1).unwrap()
+    let e = safe_div(8, 2).to_option().unwrap_or(0)
+    io.println("a={a} b={b} c={c} d={d} e={e}")
+

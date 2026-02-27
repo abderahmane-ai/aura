@@ -1,0 +1,5 @@
+import std.io as io
+fn main():
+    let v = None().unwrap()
+    io.println("v={v}")
+

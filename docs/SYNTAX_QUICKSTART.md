@@ -5,6 +5,8 @@ This guide reflects the syntax currently implemented in this repository's TypeSc
 ## 1. Program Entry
 
 ```aura
+import std.io as io
+
 fn main():
     io.println("Hello, Aura")
 ```
@@ -79,6 +81,8 @@ count += 2
 - `nil`
 - `List` (`[1, 2, 3]`)
 - `Map` (`{"a": 1, "b": 2}`)
+- `Option` (`Some(value)` / `None()`)
+- `Result` (`Ok(value)` / `Err(error)`)
 
 ```aura
 let n = 42
@@ -88,6 +92,8 @@ let text = "hello"
 let none = nil
 let items = [1, 2, 3]
 let m = {"x": 10, "y": 20}
+let maybe_user: Option = Some("Ada")
+let parse_result: Result = Ok(42)
 ```
 
 ## 5. Strings and Interpolation
@@ -96,7 +102,60 @@ let m = {"x": 10, "y": 20}
 let user = "Ada"
 let score = 99
 io.println("User: {user}, score: {score}")
+
+let slug = "  Aura Lang  ".trim().lower().replace(" ", "-")
+let parts = slug.split("-")
+let has_lang = slug.contains("lang")
+let padded = "7".pad_left(3, "0")
+let csv = ",".join(["a", "b", "c"])
 ```
+
+Common string methods:
+- `len()`, `is_empty()`
+- `upper()`, `lower()`, `trim()`
+- `split(sep, limit?)`, `join(collection)`
+- `contains(x)`, `starts_with(x)`, `ends_with(x)`
+- `index_of(x)`, `last_index_of(x)`
+- `replace(from, to)`, `repeat(n)`
+- `slice(start, end?)`, `char_at(i)`
+- `chars()`, `lines()`
+- `title()`, `words()`
+- `camel_case()`, `snake_case()`, `kebab_case()`
+- `remove_prefix(x)`, `remove_suffix(x)`
+
+## 5.1 Option and Result
+
+```aura
+fn div_checked(a: Float64, b: Float64):
+    if b == 0:
+        return Err("division by zero")
+    return Ok(a / b)
+
+fn main():
+    let maybe_name: Option = Option("Ada")
+    let guest_name = maybe_name.unwrap_or("Guest")
+
+    let r: Result = div_checked(10, 0)
+    let value = r.unwrap_or(-1)
+
+    match r:
+        case .ok(v):
+            io.println("ok {v}")
+        case .error(msg):
+            io.println("error {msg}")
+```
+
+Option methods:
+- `is_some()`, `is_none()`
+- `unwrap()`, `unwrap_or(v)`, `expect(msg)`
+- `map(fn)`, `and_then(fn)`, `filter(fn)`, `or_else(fn)`
+- `ok_or(err)`, `or(value)`, `tap(fn)`
+
+Result methods:
+- `is_ok()`, `is_err()`
+- `unwrap()`, `unwrap_err()`, `unwrap_or(v)`, `expect(msg)`
+- `map(fn)`, `map_err(fn)`, `and_then(fn)`, `or_else(fn)`
+- `tap(fn)`, `tap_err(fn)`, `recover(fn)`, `to_option()`
 
 ## 6. Operators
 
@@ -243,6 +302,13 @@ Common list methods:
 - `sum()`
 - `map(fn)`
 - `filter(fn)`
+- `reduce(fn, init)`
+- `flat_map(fn)`, `flatten(depth?)`
+- `find(fn)`, `find_index(fn)`
+- `any(fn)`, `all(fn)`, `count(fn)`
+- `group_by(fn)`, `key_by(fn)`
+- `sort_by(fn)`, `min_by(fn)`, `max_by(fn)`
+- `zip(other)`, `enumerate()`
 - `is_empty()`
 - `clear()`
 
@@ -328,11 +394,16 @@ fn main():
 ## 12. Built-ins
 
 - `print(...)`
-- `io.println(...)`, `io.print(...)`
+- `std.io` module provides `io.print(...)` / `io.println(...)` after `import std.io as io`
 - `len(x)`
 - `min(a, b)`, `max(a, b)`
 - `str(x)`, `int(x)`, `float(x)`
 - `range(start, end)`
+- Option / Result constructors:
+- `Option(value?)`, `Some(value)`, `None()`
+- `Result(value, error?)`, `Ok(value)`, `Err(error)`
+- Option / Result helpers:
+- `is_some(x)`, `is_none(x)`, `is_ok(x)`, `is_err(x)`
 - Collections constructors:
 - `Stack(...)`, `Queue(...)`, `LinkedList(...)`, `Indexed(...)`
 - `HashMap(...)`, `TreeMap(...)`, `Heap(...)`
@@ -390,12 +461,35 @@ fn main():
     let fixed = math.balance.round_to_total([33.333, 33.333, 33.333], 100, 2)
     let exact_sum = math.exact.add(0.1, 0.2, 6)
     let scaler = math.scale([2, 3, 3, 4, 200], "robust", true)
-    io.println("fixed={fixed} exact={exact_sum} map(4)={scaler.map(4)}")
+io.println("fixed={fixed} exact={exact_sum} map(4)={scaler.map(4)}")
+```
+
+### 12.3 Practical Std Modules
+
+Available MVP modules:
+- `std.io` (stdout/stderr, input helpers, table/banner/line, structured logging)
+- `std.fs` (text/json IO, copy/move/walk/stat, path utilities, temp dirs)
+- `std.json` (parse/try_parse/valid/stringify/path helpers)
+- `std.time` (durations, clocks, parse/format, timer/profile helpers)
+- `std.collections` (pipelines + grouping + set-like list operations)
+
+Full reference: `docs/STDLIB.md`.
+
+```aura
+import std.fs as fs
+import std.json as json
+import std.time as time
+
+fn main():
+    fs.mkdir("tmp", true)
+    fs.write_text("tmp/sample.json", json.pretty({"name": "Aura"}))
+    let data = fs.read_json("tmp/sample.json")
+    io.println("name={data["name"]} at {time.now_iso()}")
 ```
 
 ## 13. Current MVP Limits (in this repo)
 
-- Modules execute in a shared global runtime (true module isolation is not implemented yet).
+- Imported modules execute with isolated module scopes; only the imported alias is exposed to callers.
 - `async/await` tokens exist but runtime is synchronous.
 - Interfaces/traits are runtime-light (structural behavior is minimal).
 - Some advanced type-system features are parsed but not enforced at runtime.

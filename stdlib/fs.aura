@@ -1,0 +1,131 @@
+module std.fs
+
+import std.json as json
+
+fn exists(path: String) -> Bool:
+    return __fs_exists(path)
+
+fn read_text(path: String) -> String:
+    return __fs_read(path)
+
+fn write_text(path: String, content: String):
+    __fs_write(path, content)
+
+fn append_text(path: String, content: String):
+    __fs_append(path, content)
+
+fn delete(path: String):
+    __fs_delete(path)
+
+fn mkdir(path: String, recursive: Bool = true):
+    __fs_mkdir(path, recursive)
+
+fn list(path: String):
+    return __fs_list(path)
+
+fn stat(path: String):
+    return __fs_stat(path)
+
+fn copy(src: String, dst: String, overwrite: Bool = true):
+    __fs_copy(src, dst, overwrite)
+
+fn move(src: String, dst: String, overwrite: Bool = true):
+    __fs_move(src, dst, overwrite)
+
+fn cwd() -> String:
+    return __fs_cwd()
+
+fn abs(path: String) -> String:
+    return __fs_abs(path)
+
+fn join(parts):
+    return __fs_join(parts)
+
+fn basename(path: String) -> String:
+    return __fs_basename(path)
+
+fn dirname(path: String) -> String:
+    return __fs_dirname(path)
+
+fn extname(path: String) -> String:
+    return __fs_extname(path)
+
+fn normalize(path: String) -> String:
+    return __fs_normalize(path)
+
+fn walk(path: String, recursive: Bool = true):
+    return __fs_walk(path, recursive)
+
+fn temp_dir(prefix: String = "aura-") -> String:
+    return __fs_temp_dir(prefix)
+
+fn is_file(path: String) -> Bool:
+    return stat(path)["is_file"] == true
+
+fn is_dir(path: String) -> Bool:
+    return stat(path)["is_dir"] == true
+
+fn size(path: String) -> Int:
+    return stat(path)["size"]
+
+fn mtime_ms(path: String) -> Int:
+    return stat(path)["mtime_ms"]
+
+fn ensure_dir(path: String):
+    if not exists(path):
+        mkdir(path, true)
+
+fn ensure_parent_dir(path: String):
+    let parent = dirname(path)
+    if parent.len() > 0 and parent != ".":
+        ensure_dir(parent)
+
+fn touch(path: String):
+    if exists(path):
+        append_text(path, "")
+    else:
+        ensure_parent_dir(path)
+        write_text(path, "")
+
+fn read_lines(path: String):
+    let text = read_text(path)
+    if text.len() == 0:
+        return []
+    return text.split("\n")
+
+fn write_lines(path: String, lines, trailing_newline: Bool = true):
+    let content = "\n".join(to_list(lines))
+    if trailing_newline:
+        content = "{content}\n"
+    write_text(path, content)
+
+fn append_lines(path: String, lines, trailing_newline: Bool = true):
+    let content = "\n".join(to_list(lines))
+    if trailing_newline:
+        content = "{content}\n"
+    append_text(path, content)
+
+fn read_json(path: String):
+    return json.parse(read_text(path))
+
+fn read_json_safe(path: String):
+    return json.try_parse(read_text(path))
+
+fn write_json(path: String, value, pretty: Bool = true):
+    write_text(path, json.stringify(value, pretty))
+
+fn list_files(path: String, recursive: Bool = false):
+    let out = []
+    for rel in walk(path, recursive):
+        let full = join([path, rel])
+        if is_file(full):
+            out.push(rel)
+    return out
+
+fn list_dirs(path: String, recursive: Bool = false):
+    let out = []
+    for rel in walk(path, recursive):
+        let full = join([path, rel])
+        if is_dir(full):
+            out.push(rel)
+    return out

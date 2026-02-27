@@ -1,0 +1,17 @@
+import std.io as io
+unit Time:
+    base: ms
+    sec = ms * 1000
+
+constraint Percent(value: Float64):
+    require value >= 0
+    require value <= 100
+
+fn main():
+    let t1: measure Time = 1500ms
+    let t2: measure Time = 1sec
+    let total: measure Time = t1 + t2
+    let p: Percent = 50
+    io.println("total={total}")
+    io.println("p={p}")
+

@@ -1,0 +1,183 @@
+module std.collections
+
+fn list(value):
+    return to_list(value)
+
+fn sum_of(value):
+    return sum(value)
+
+fn sorted(value):
+    return sort(value)
+
+fn unique_of(value):
+    return unique(value)
+
+fn top(value, n: Int):
+    return top_k(value, n)
+
+fn frequencies(value):
+    return freq(value)
+
+fn chunked(value, size: Int):
+    return chunk(value, size)
+
+fn windowed(value, size: Int):
+    return window(value, size)
+
+fn take_first(value, n: Int):
+    return take(value, n)
+
+fn drop_first(value, n: Int):
+    return drop(value, n)
+
+fn reduce(items, fn_ref, init):
+    return to_list(items).reduce(fn_ref, init)
+
+fn map(items, fn_ref):
+    return to_list(items).map(fn_ref)
+
+fn filter(items, fn_ref):
+    return to_list(items).filter(fn_ref)
+
+fn reject(items, fn_ref):
+    let out = []
+    let i = 0
+    let xs = to_list(items)
+    while i < xs.len():
+        let item = xs[i]
+        if not fn_ref(item, i, xs):
+            out.push(item)
+        i += 1
+    return out
+
+fn flat_map(items, fn_ref):
+    return to_list(items).flat_map(fn_ref)
+
+fn flatten(items, depth: Int = 1):
+    return to_list(items).flatten(depth)
+
+fn find(items, fn_ref):
+    return to_list(items).find(fn_ref)
+
+fn find_index(items, fn_ref):
+    return to_list(items).find_index(fn_ref)
+
+fn any(items, fn_ref):
+    return to_list(items).any(fn_ref)
+
+fn all(items, fn_ref):
+    return to_list(items).all(fn_ref)
+
+fn count(items, fn_ref):
+    return to_list(items).count(fn_ref)
+
+fn group_by(items, fn_ref):
+    return to_list(items).group_by(fn_ref)
+
+fn group_count_by(items, fn_ref):
+    let grouped = group_by(items, fn_ref)
+    let out = {}
+    for key in grouped:
+        out[key] = grouped[key].len()
+    return out
+
+fn key_by(items, fn_ref):
+    return to_list(items).key_by(fn_ref)
+
+fn index_by(items, fn_ref):
+    return key_by(items, fn_ref)
+
+fn sort_by(items, fn_ref):
+    return to_list(items).sort_by(fn_ref)
+
+fn min_by(items, fn_ref):
+    return to_list(items).min_by(fn_ref)
+
+fn max_by(items, fn_ref):
+    return to_list(items).max_by(fn_ref)
+
+fn zip(left, right):
+    return to_list(left).zip(right)
+
+fn enumerate(items):
+    return to_list(items).enumerate()
+
+fn partition(items, fn_ref):
+    let passed = []
+    let failed = []
+    for item in to_list(items):
+        if fn_ref(item):
+            passed.push(item)
+        else:
+            failed.push(item)
+    return [passed, failed]
+
+fn contains(items, value) -> Bool:
+    for item in to_list(items):
+        if item == value:
+            return true
+    return false
+
+fn concat(left, right):
+    let out = to_list(left).to_list()
+    for value in to_list(right):
+        out.push(value)
+    return out
+
+fn union(left, right):
+    return unique_of(concat(left, right))
+
+fn intersection(left, right):
+    let right_lookup = HashMap()
+    for item in unique_of(to_list(right)):
+        right_lookup.set(str(item), true)
+    let out = []
+    for item in unique_of(to_list(left)):
+        if right_lookup.has(str(item)):
+            out.push(item)
+    return out
+
+fn difference(left, right):
+    let right_lookup = HashMap()
+    for item in unique_of(to_list(right)):
+        right_lookup.set(str(item), true)
+    let out = []
+    for item in unique_of(to_list(left)):
+        if not right_lookup.has(str(item)):
+            out.push(item)
+    return out
+
+fn pairs(obj):
+    let out = []
+    for key in obj:
+        out.push([key, obj[key]])
+    return out
+
+fn keys(obj):
+    let out = []
+    for key in obj:
+        out.push(key)
+    return out
+
+fn values(obj):
+    let out = []
+    for key in obj:
+        out.push(obj[key])
+    return out
+
+fn from_pairs(items):
+    let out = {}
+    for pair in to_list(items):
+        let p = to_list(pair)
+        if p.len() >= 2:
+            out[p[0]] = p[1]
+    return out
+
+fn pluck(items, field: String):
+    let out = []
+    for item in to_list(items):
+        out.push(item[field])
+    return out
+
+fn compact(items):
+    return to_list(items).filter(fn(v) = v != nil)

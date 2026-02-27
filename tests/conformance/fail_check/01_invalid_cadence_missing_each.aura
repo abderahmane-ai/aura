@@ -1,0 +1,6 @@
+import std.io as io
+fn main():
+    cadence x in [1, 2]:
+        start:
+            io.println("start")
+

@@ -31,7 +31,7 @@ The following are **theoretical estimates** based on the compilation strategy (A
 | **Aura** (`--release`) | ~0.6 s | Same LLVM backend, minimal ARC impact (no heap allocs) |
 | Python 3.12 | ~25 s | Interpreted bytecode |
 
-### HTTP Server Throughput (req/s, "Hello World")
+### Server Throughput (req/s, "Hello World")
 
 | Language | Requests/sec | Notes |
 |---|---|---|

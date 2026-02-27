@@ -1,0 +1,76 @@
+import std.io as io
+import std.json as json
+
+fn section(title: String):
+    io.hline(64, "-")
+    io.println(title)
+    io.hline(64, "-")
+
+fn main():
+    io.banner("JSON Library Test", 64, "=")
+
+    let source = {"app": "Aura", "version": 1, "features": {"io": true, "json": true}, "scores": [10, 20, 30]}
+    let raw = json.stringify(source, false)
+    let invalid = "not-json"
+
+    section("1) Validation and Parsing")
+    io.println("valid(raw)    = {json.valid(raw)}")
+    io.println("valid(invalid)= {json.valid(invalid)}")
+    let doc = json.parse(raw)
+    io.println("type(doc)     = {json.type_of(doc)}")
+    io.println("compact(doc)  = {json.stringify(doc, false)}")
+
+    section("2) try_parse and parse_or")
+    let parsed_ok = json.try_parse(raw)
+    let parsed_bad = json.try_parse(invalid)
+    io.println("try_parse(raw).is_ok()     = {parsed_ok.is_ok()}")
+    io.println("try_parse(invalid).is_err()= {parsed_bad.is_err()}")
+    let fallback = json.parse_or(invalid, {"fallback": true, "reason": "invalid json"})
+    io.println("parse_or(invalid, fallback)= {fallback}")
+
+    section("3) Path Queries")
+    let app_name = json.get_path(doc, "app", "unknown")
+    let second_score = json.get_path(doc, "scores[1]", -1)
+    let missing_score = json.get_path(doc, "scores[9]", "N/A")
+    let has_io_feature = json.has_path(doc, "features.io")
+    let has_http_feature = json.has_path(doc, "features.http")
+    io.println("get_path(app)       = {app_name}")
+    io.println("get_path(scores[1]) = {second_score}")
+    io.println("get_path(scores[9]) = {missing_score}")
+    io.println("has_path(features.io)   = {has_io_feature}")
+    io.println("has_path(features.http) = {has_http_feature}")
+
+    section("4) require_path")
+    let req_ok = json.require_path(doc, "features.json")
+    let req_missing = json.require_path(doc, "features.http")
+    if req_ok.is_ok():
+        io.println("require_path(features.json) ok = {req_ok.unwrap()}")
+    else:
+        io.println("require_path(features.json) err= {req_ok.unwrap_err()}")
+    if req_missing.is_ok():
+        io.println("require_path(features.http) ok = {req_missing.unwrap()}")
+    else:
+        io.println("require_path(features.http) err= {req_missing.unwrap_err()}")
+
+    section("5) Transform Helpers")
+    let merged = json.merge(doc, {"owner": "Aura Team", "version": 2})
+    let picked = json.pick(merged, ["app", "owner", "scores[0]", "features.io"])
+    let scaled = json.map_values({"a": 1, "b": 2, "c": 3}, fn(v, k, obj) = v * 10)
+    let merged_version = merged["version"]
+    io.println("merged.version = {merged_version}")
+    io.println("picked         = {picked}")
+    io.println("map_values     = {scaled}")
+
+    section("6) clone and pretty")
+    let cloned = json.clone(doc)
+    cloned["version"] = 99
+    let original_version = doc["version"]
+    let cloned_version = cloned["version"]
+    io.println("original version = {original_version}")
+    io.println("cloned version   = {cloned_version}")
+    io.println("pretty(merged):")
+    io.println(json.pretty(merged, 2))
+
+    io.hline(64, "=")
+    io.println("JSON test completed successfully.")
+    io.hline(64, "=")

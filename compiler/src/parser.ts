@@ -888,7 +888,7 @@ export class Parser {
                 return { kind: 'RangeExpr', start: left, end: right, inclusive: op.type === 'DOT_DOT_EQ', line };
             }
             case 'DOT': {
-                const name = this.expectIdent();
+                const name = this.expectMemberName();
                 if (this.check('LPAREN')) {
                     const args = this.parseArgs();
                     return { kind: 'MethodCallExpr', obj: left, method: name, args, line };
@@ -932,7 +932,7 @@ export class Parser {
             const t = this.peek();
             if (t.type === 'DOT') {
                 this.advance();
-                const name = this.expectIdent();
+                const name = this.expectMemberName();
                 if (this.check('LPAREN')) {
                     const args = this.parseArgs();
                     node = { kind: 'MethodCallExpr', obj: node, method: name, args, line: t.line };
@@ -1292,6 +1292,11 @@ export class Parser {
         const t = this.peek();
         if (t.type !== 'IDENT' && t.type !== 'SELF') parseError(`Expected identifier but got '${t.type}' ('${t.value}')`, t, this.file);
         return this.advance().value;
+    }
+    private expectMemberName(): string {
+        const t = this.peek();
+        if (t.type === 'IDENT' || t.type === 'SELF' || t.type === 'OR' || t.type === 'REPEAT') return this.advance().value;
+        parseError(`Expected member name but got '${t.type}' ('${t.value}')`, t, this.file);
     }
     private skipNewlines(): void {
         while (this.check('NEWLINE') || this.check('SEMICOLON')) this.advance();

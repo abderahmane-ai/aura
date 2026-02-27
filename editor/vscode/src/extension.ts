@@ -6,6 +6,8 @@ const path: any = require('path');
 type AuraType =
     | 'string'
     | 'list'
+    | 'option'
+    | 'result'
     | 'indexed'
     | 'stack'
     | 'queue'
@@ -70,11 +72,12 @@ const KEYWORD_DOCS: Record<string, string> = {
 const BUILTIN_FUNCTIONS = [
     'print', 'len', 'min', 'max', 'str', 'int', 'float', 'abs', 'sqrt', 'range',
     'to_list', 'sum', 'sort', 'unique', 'top_k', 'freq', 'chunk', 'window', 'take', 'drop',
-    'panic',
+    'panic', 'is_some', 'is_none', 'is_ok', 'is_err',
 ];
 
 const BUILTIN_CONSTRUCTORS = [
     'List', 'Stack', 'Queue', 'LinkedList', 'HashMap', 'TreeMap', 'Heap', 'Indexed',
+    'Option', 'Some', 'None', 'Result', 'Ok', 'Err',
 ];
 
 const TOP_LEVEL_SNIPPETS: Array<{ label: string; detail: string; insert: string; kind: any; doc?: string }> = [
@@ -148,10 +151,66 @@ const CADENCE_CLAUSE_SNIPPETS = ['start', 'first', 'each', 'between', 'last', 'e
 const TYPE_METHODS: Record<AuraType, MethodSpec[]> = {
     string: [
         { name: 'len', detail: 'string.len() -> Int', doc: 'Length of the string.' },
+        { name: 'is_empty', detail: 'string.is_empty() -> Bool', doc: 'True when string has length 0.' },
         { name: 'upper', detail: 'string.upper() -> String', doc: 'Upper-case copy.' },
         { name: 'lower', detail: 'string.lower() -> String', doc: 'Lower-case copy.' },
         { name: 'trim', detail: 'string.trim() -> String', doc: 'Trim leading/trailing whitespace.' },
-        { name: 'split', detail: 'string.split(sep) -> List', snippet: 'split(${1:sep})' },
+        { name: 'split', detail: 'string.split(sep, limit?) -> List', snippet: 'split(${1:sep}${2:, ${3:limit}})' },
+        { name: 'contains', detail: 'string.contains(substr) -> Bool', snippet: 'contains(${1:substr})' },
+        { name: 'starts_with', detail: 'string.starts_with(prefix) -> Bool', snippet: 'starts_with(${1:prefix})' },
+        { name: 'ends_with', detail: 'string.ends_with(suffix) -> Bool', snippet: 'ends_with(${1:suffix})' },
+        { name: 'index_of', detail: 'string.index_of(substr) -> Int', snippet: 'index_of(${1:substr})' },
+        { name: 'last_index_of', detail: 'string.last_index_of(substr) -> Int', snippet: 'last_index_of(${1:substr})' },
+        { name: 'replace', detail: 'string.replace(from, to) -> String', snippet: 'replace(${1:from}, ${2:to})' },
+        { name: 'repeat', detail: 'string.repeat(n) -> String', snippet: 'repeat(${1:n})' },
+        { name: 'slice', detail: 'string.slice(start, end?) -> String', snippet: 'slice(${1:start}${2:, ${3:end}})' },
+        { name: 'char_at', detail: 'string.char_at(index) -> String|nil', snippet: 'char_at(${1:index})' },
+        { name: 'chars', detail: 'string.chars() -> List' },
+        { name: 'lines', detail: 'string.lines() -> List' },
+        { name: 'pad_left', detail: 'string.pad_left(width, fill?) -> String', snippet: 'pad_left(${1:width}${2:, ${3:" "}})' },
+        { name: 'pad_right', detail: 'string.pad_right(width, fill?) -> String', snippet: 'pad_right(${1:width}${2:, ${3:" "}})' },
+        { name: 'join', detail: 'string.join(collection) -> String', snippet: 'join(${1:items})' },
+        { name: 'title', detail: 'string.title() -> String' },
+        { name: 'words', detail: 'string.words() -> List' },
+        { name: 'camel_case', detail: 'string.camel_case() -> String' },
+        { name: 'snake_case', detail: 'string.snake_case() -> String' },
+        { name: 'kebab_case', detail: 'string.kebab_case() -> String' },
+        { name: 'remove_prefix', detail: 'string.remove_prefix(prefix) -> String', snippet: 'remove_prefix(${1:prefix})' },
+        { name: 'remove_suffix', detail: 'string.remove_suffix(suffix) -> String', snippet: 'remove_suffix(${1:suffix})' },
+    ],
+    option: [
+        { name: 'tag', detail: 'option.tag() -> String' },
+        { name: 'values', detail: 'option.values() -> List' },
+        { name: 'is_some', detail: 'option.is_some() -> Bool' },
+        { name: 'is_none', detail: 'option.is_none() -> Bool' },
+        { name: 'unwrap', detail: 'option.unwrap() -> Value' },
+        { name: 'unwrap_or', detail: 'option.unwrap_or(fallback) -> Value', snippet: 'unwrap_or(${1:fallback})' },
+        { name: 'expect', detail: 'option.expect(message) -> Value', snippet: 'expect(${1:"message"})' },
+        { name: 'map', detail: 'option.map(fn) -> Option', snippet: 'map(${1:fn(x) = x})' },
+        { name: 'and_then', detail: 'option.and_then(fn) -> Option', snippet: 'and_then(${1:fn(x) = Some(x)})' },
+        { name: 'filter', detail: 'option.filter(fn) -> Option', snippet: 'filter(${1:fn(x) = true})' },
+        { name: 'ok_or', detail: 'option.ok_or(err) -> Result', snippet: 'ok_or(${1:error})' },
+        { name: 'or', detail: 'option.or(value) -> Option', snippet: 'or(${1:value})' },
+        { name: 'tap', detail: 'option.tap(fn) -> Option', snippet: 'tap(${1:fn(x) = io.println(x)})' },
+        { name: 'or_else', detail: 'option.or_else(fn) -> Option', snippet: 'or_else(${1:fn() = Some(value)})' },
+    ],
+    result: [
+        { name: 'tag', detail: 'result.tag() -> String' },
+        { name: 'values', detail: 'result.values() -> List' },
+        { name: 'is_ok', detail: 'result.is_ok() -> Bool' },
+        { name: 'is_err', detail: 'result.is_err() -> Bool' },
+        { name: 'unwrap', detail: 'result.unwrap() -> Value' },
+        { name: 'unwrap_err', detail: 'result.unwrap_err() -> Value' },
+        { name: 'unwrap_or', detail: 'result.unwrap_or(fallback) -> Value', snippet: 'unwrap_or(${1:fallback})' },
+        { name: 'expect', detail: 'result.expect(message) -> Value', snippet: 'expect(${1:"message"})' },
+        { name: 'map', detail: 'result.map(fn) -> Result', snippet: 'map(${1:fn(x) = x})' },
+        { name: 'map_err', detail: 'result.map_err(fn) -> Result', snippet: 'map_err(${1:fn(e) = e})' },
+        { name: 'and_then', detail: 'result.and_then(fn) -> Result', snippet: 'and_then(${1:fn(x) = Ok(x)})' },
+        { name: 'tap', detail: 'result.tap(fn) -> Result', snippet: 'tap(${1:fn(v) = io.println(v)})' },
+        { name: 'tap_err', detail: 'result.tap_err(fn) -> Result', snippet: 'tap_err(${1:fn(e) = io.println(e)})' },
+        { name: 'recover', detail: 'result.recover(fn) -> Result', snippet: 'recover(${1:fn(e) = 0})' },
+        { name: 'to_option', detail: 'result.to_option() -> Option' },
+        { name: 'or_else', detail: 'result.or_else(fn) -> Result', snippet: 'or_else(${1:fn(e) = Ok(value)})' },
     ],
     list: [
         { name: 'len', detail: 'list.len() -> Int' },
@@ -166,6 +225,21 @@ const TYPE_METHODS: Record<AuraType, MethodSpec[]> = {
         { name: 'push', detail: 'list.push(value)', snippet: 'push(${1:value})' },
         { name: 'map', detail: 'list.map(fn) -> List', snippet: 'map(${1:fn(x) = x})' },
         { name: 'filter', detail: 'list.filter(fn) -> List', snippet: 'filter(${1:fn(x) = true})' },
+        { name: 'reduce', detail: 'list.reduce(fn, init) -> Value', snippet: 'reduce(${1:fn(acc, x) = acc}, ${2:init})' },
+        { name: 'flat_map', detail: 'list.flat_map(fn) -> List', snippet: 'flat_map(${1:fn(x) = [x]})' },
+        { name: 'flatten', detail: 'list.flatten(depth?) -> List', snippet: 'flatten(${1:1})' },
+        { name: 'find', detail: 'list.find(fn) -> Value|nil', snippet: 'find(${1:fn(x) = true})' },
+        { name: 'find_index', detail: 'list.find_index(fn) -> Int', snippet: 'find_index(${1:fn(x) = true})' },
+        { name: 'any', detail: 'list.any(fn) -> Bool', snippet: 'any(${1:fn(x) = true})' },
+        { name: 'all', detail: 'list.all(fn) -> Bool', snippet: 'all(${1:fn(x) = true})' },
+        { name: 'count', detail: 'list.count(fn) -> Int', snippet: 'count(${1:fn(x) = true})' },
+        { name: 'group_by', detail: 'list.group_by(fn) -> Map', snippet: 'group_by(${1:fn(x) = x})' },
+        { name: 'key_by', detail: 'list.key_by(fn) -> Map', snippet: 'key_by(${1:fn(x) = x})' },
+        { name: 'sort_by', detail: 'list.sort_by(fn) -> List', snippet: 'sort_by(${1:fn(x) = x})' },
+        { name: 'min_by', detail: 'list.min_by(fn) -> Value|nil', snippet: 'min_by(${1:fn(x) = x})' },
+        { name: 'max_by', detail: 'list.max_by(fn) -> Value|nil', snippet: 'max_by(${1:fn(x) = x})' },
+        { name: 'zip', detail: 'list.zip(other) -> List', snippet: 'zip(${1:other})' },
+        { name: 'enumerate', detail: 'list.enumerate() -> List' },
     ],
     indexed: [
         { name: 'len', detail: 'indexed.len() -> Int' },
@@ -409,6 +483,8 @@ function inferFromTypeAnn(typeAnn: string): AuraType | undefined {
     if (!typeAnn) return undefined;
     if (/String\b/.test(typeAnn)) return 'string';
     if (/List\b/.test(typeAnn)) return 'list';
+    if (/Option\b/.test(typeAnn)) return 'option';
+    if (/Result\b/.test(typeAnn)) return 'result';
     if (/Indexed\b/.test(typeAnn)) return 'indexed';
     if (/Stack\b/.test(typeAnn)) return 'stack';
     if (/Queue\b/.test(typeAnn)) return 'queue';
@@ -423,6 +499,8 @@ function inferFromRhs(rhs: string): AuraType | undefined {
     if (!rhs) return undefined;
     if (/^".*"$/.test(rhs) || /^'.*'$/.test(rhs)) return 'string';
     if (/^\[/.test(rhs)) return 'list';
+    if (/^(Some|None|Option)\s*\(/.test(rhs)) return 'option';
+    if (/^(Ok|Err|Result)\s*\(/.test(rhs)) return 'result';
     if (/^\{/.test(rhs)) return 'unknown';
     if (/^Stack\s*\(/.test(rhs)) return 'stack';
     if (/^Queue\s*\(/.test(rhs)) return 'queue';

@@ -2,9 +2,16 @@ import { ASTNode, MatchPattern } from './types.js';
 import { compileError } from './errors.js';
 
 const BUILTINS = new Set<string>([
-    'print', 'len', 'min', 'max', 'str', 'int', 'float', 'abs', 'sqrt', 'range', 'io', 'List',
+    'print', 'len', 'min', 'max', 'str', 'int', 'float', 'abs', 'sqrt', 'range', 'List',
     'Stack', 'Queue', 'LinkedList', 'HashMap', 'Heap', 'TreeMap', 'Indexed',
     'to_list', 'sum', 'sort', 'unique', 'top_k', 'freq', 'chunk', 'window', 'take', 'drop',
+    'Option', 'Some', 'None', 'Result', 'Ok', 'Err',
+    'is_some', 'is_none', 'is_ok', 'is_err',
+    '__json_parse', '__json_try_parse', '__json_valid', '__json_stringify', '__json_typeof', '__json_get_path', '__json_has_path',
+    '__fs_exists', '__fs_read', '__fs_write', '__fs_append', '__fs_delete', '__fs_mkdir', '__fs_list', '__fs_stat',
+    '__fs_copy', '__fs_move', '__fs_cwd', '__fs_abs', '__fs_join', '__fs_basename', '__fs_dirname', '__fs_extname', '__fs_normalize', '__fs_walk', '__fs_temp_dir',
+    '__io_write', '__io_writeln', '__io_write_err', '__io_writeln_err', '__io_read_line', '__io_read_all_stdin',
+    '__time_now_ms', '__time_now_unix_s', '__time_iso_now', '__time_monotonic_ms', '__time_sleep_ms', '__time_parse_iso', '__time_from_unix_ms', '__time_from_unix_s', '__time_to_unix_s', '__time_parts', '__time_add_ms', '__time_diff_ms',
     'panic', '__unit_register', '__measure', '__measure_expect',
 ]);
 

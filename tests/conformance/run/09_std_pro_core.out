@@ -1,0 +1,4 @@
+kind=object value=20 has0=true missing={"fallback": true}
+picked={"name": Aura, "nested.x[2]": 30}
+iso=2026-01-01T00:01:30.000Z unix=1767225600 year=2026 minute=0
+line=***** repeat=abab

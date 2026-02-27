@@ -1,0 +1,13 @@
+import std.io as io
+facet Greeter:
+    fn greet(name: String):
+        io.println("hi {name}")
+
+class Bot:
+    adopts Greeter
+
+fn main():
+    let b = Bot()
+    as b: Greeter:
+        b.greet("aura")
+

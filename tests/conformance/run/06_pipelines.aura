@@ -1,0 +1,28 @@
+import std.io as io
+fn main():
+    let xs = [1, 2, 3, 4, 5]
+    let reduced = xs.reduce(fn(acc: Int, x: Int) = acc + x, 0)
+    let flat = xs.flat_map(fn(x: Int) = [x, x * 2])
+    let flat2 = [[1, 2], [3], [4, [5]]].flatten(2)
+    let found = xs.find(fn(x: Int) = x > 3)
+    let found_index = xs.find_index(fn(x: Int) = x > 3)
+    let any_gt4 = xs.any(fn(x: Int) = x > 4)
+    let all_pos = xs.all(fn(x: Int) = x > 0)
+    let count_even = xs.count(fn(x: Int) = x % 2 == 0)
+    let grouped = xs.group_by(fn(x: Int) = x % 2)
+    let keyed = xs.key_by(fn(x: Int) = "k{x}")
+    let sorted = [3, -1, 2].sort_by(fn(x: Int) = abs(x))
+    let min_abs = [3, -1, 2].min_by(fn(x: Int) = abs(x))
+    let max_abs = [3, -1, 2].max_by(fn(x: Int) = abs(x))
+    let zipped = xs.zip(["a", "b"])
+    let enumed = ["q", "w"].enumerate()
+
+    io.println("reduced={reduced} found={found} idx={found_index}")
+    io.println("any={any_gt4} all={all_pos} count_even={count_even}")
+    io.println("flat={flat}")
+    io.println("flat2={flat2}")
+    io.println("grouped={grouped}")
+    io.println("keyed={keyed}")
+    io.println("sorted={sorted} min_abs={min_abs} max_abs={max_abs}")
+    io.println("zipped={zipped} enumed={enumed}")
+

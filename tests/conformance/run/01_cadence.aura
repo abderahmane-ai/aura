@@ -1,0 +1,24 @@
+import std.io as io
+fn main():
+    cadence x in [1, 2, 3]:
+        start:
+            io.print("S|")
+        first:
+            io.print("F{x}|")
+        each:
+            io.print("E{x}|")
+        between:
+            io.print("B|")
+        last:
+            io.print("L|")
+        empty:
+            io.print("EMPTY|")
+    io.println("")
+
+    cadence y in []:
+        each:
+            io.print("E{y}|")
+        empty:
+            io.print("EMPTY|")
+    io.println("")
+

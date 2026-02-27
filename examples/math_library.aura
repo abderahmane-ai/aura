@@ -1,3 +1,4 @@
+import std.io as io
 import std.math as math
 
 fn main():
@@ -100,3 +101,4 @@ fn main():
     io.println("scale.project([2,4,200])={scaled}")
     io.println("scale.map(4)={map4} scale.map(200)={map200}")
     io.println("scale.unmap(0.75)={unmap75}")
+

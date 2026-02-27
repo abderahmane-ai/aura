@@ -1,3 +1,4 @@
+import std.io as io
 fn main():
     io.println("=== Native Data Structures ===")
 

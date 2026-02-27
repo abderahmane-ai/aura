@@ -379,7 +379,7 @@ class Node:
 
 ```aura
 async fn fetch_data(url: String) -> Result<Data, NetError>:
-    let response = await http.get(url)
+    let response = await net.fetch(url)
     return response.body()
 ```
 
@@ -452,7 +452,7 @@ The `try` keyword unwraps a `Result` or immediately returns the `.error` from th
 | Module | Contents |
 |---|---|
 | `io` | File I/O, stdin/stdout, streams |
-| `net` | TCP/UDP sockets, HTTP client |
+| `net` | TCP/UDP sockets, request client |
 | `collections` | List, Map, Set, Deque, PriorityQueue |
 | `math` | Numeric functions, constants |
 | `text` | Regex, Unicode utilities |

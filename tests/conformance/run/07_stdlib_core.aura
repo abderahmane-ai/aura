@@ -1,0 +1,36 @@
+import std.fs as fs
+import std.json as json
+import std.time as time
+import std.collections as collections
+import std.io as sio
+
+fn main():
+    let dir = "tests/_tmp_conformance"
+    let path = "{dir}/sample.json"
+    fs.delete(dir)
+    fs.mkdir(dir, true)
+
+    let payload = {"name": "Aura", "nums": [1, 2, 3]}
+    fs.write_json(path, payload, true)
+
+    let exists = fs.exists(path)
+    let loaded = fs.read_json(path)
+    let loaded_name = loaded["name"]
+    let listed = fs.list(dir)
+    let stat = fs.stat(path)
+    let size_ok = stat["size"] > 0
+
+    let parsed = json.parse(json.stringify({"x": 1}, false))
+    let json_text = json.stringify(parsed, false)
+
+    let ts = time.parse_iso("2026-01-01T00:00:00.000Z")
+    let iso = time.from_unix_ms(ts)
+
+    let grouped = collections.group_by([1, 2, 3, 4], fn(x: Int) = x % 2)
+    let builtin_min = min(4, 5)
+
+    sio.println("exists={exists} loaded_name={loaded_name} listed={listed}")
+    sio.println("size_ok={size_ok} iso={iso}")
+    sio.println("json={json_text} grouped={grouped} min={builtin_min}")
+
+    fs.delete(dir)

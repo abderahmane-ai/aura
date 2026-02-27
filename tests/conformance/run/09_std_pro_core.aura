@@ -1,0 +1,24 @@
+import std.io as sio
+import std.json as json
+import std.time as time
+
+fn main():
+    let source = {"name": "Aura", "nested": {"x": [10, 20, 30]}}
+    let text = json.stringify(source, false)
+    let parsed = json.parse(text)
+    let value = json.get_path(parsed, "nested.x[1]", -1)
+    let has0 = json.has_path(parsed, "nested.x[0]")
+    let missing = json.parse_or("not-json", {"fallback": true})
+    let picked = json.pick(parsed, ["name", "nested.x[2]"])
+    let kind = json.type_of(parsed)
+
+    let t0 = time.parse_iso("2026-01-01T00:00:00.000Z")
+    let t1 = time.add_sec(t0, 90)
+    let iso = time.from_unix_ms(t1)
+    let unix = time.to_unix_s(t0)
+    let tparts = time.parts(t0)
+
+    sio.println("kind={kind} value={value} has0={has0} missing={missing}")
+    sio.println("picked={picked}")
+    sio.println("iso={iso} unix={unix} year={tparts["year"]} minute={tparts["minute"]}")
+    sio.println("line={sio.line(5, "*")} repeat={sio.repeat_text("ab", 2)}")

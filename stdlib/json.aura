@@ -1,0 +1,66 @@
+module std.json
+
+fn parse(text: String):
+    return __json_parse(text)
+
+fn try_parse(text: String):
+    return __json_try_parse(text)
+
+fn valid(text: String) -> Bool:
+    return __json_valid(text)
+
+fn stringify(value, pretty: Bool = false) -> String:
+    return __json_stringify(value, pretty)
+
+fn pretty(value, indent: Int = 2) -> String:
+    return __json_stringify(value, indent)
+
+fn compact(value) -> String:
+    if type_of(value) == "string":
+        return stringify(parse(value), false)
+    return stringify(value, false)
+
+fn prettify_text(text: String, indent: Int = 2) -> String:
+    return __json_stringify(parse(text), indent)
+
+fn parse_or(text: String, fallback):
+    let result = try_parse(text)
+    if result.is_ok():
+        return result.unwrap()
+    return fallback
+
+fn clone(value):
+    return parse(stringify(value, false))
+
+fn type_of(value) -> String:
+    return __json_typeof(value)
+
+fn get_path(value, path: String, fallback = nil):
+    return __json_get_path(value, path, fallback)
+
+fn has_path(value, path: String) -> Bool:
+    return __json_has_path(value, path)
+
+fn require_path(value, path: String):
+    if has_path(value, path):
+        return Ok(get_path(value, path))
+    return Err("Missing JSON path '{path}'")
+
+fn pick(value, paths):
+    let out = {}
+    for path in to_list(paths):
+        if has_path(value, path):
+            out[path] = get_path(value, path)
+    return out
+
+fn merge(left, right):
+    let out = clone(left)
+    for key in right:
+        out[key] = right[key]
+    return out
+
+fn map_values(obj, fn_ref):
+    let out = {}
+    for key in obj:
+        out[key] = fn_ref(obj[key], key, obj)
+    return out

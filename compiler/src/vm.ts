@@ -28,6 +28,7 @@ interface CallFrame {
     constructing?: AuraInstance;
     fnName?: string;
     file?: string;
+    moduleScope?: Map<string, Value>;
 }
 
 export class VM {
@@ -54,6 +55,14 @@ export class VM {
 
     hasGlobal(name: string): boolean {
         return this.globals.has(name);
+    }
+
+    snapshotGlobals(): Map<string, Value> {
+        return new Map(this.globals);
+    }
+
+    restoreGlobals(snapshot: Map<string, Value>): void {
+        this.globals = new Map(snapshot);
     }
 
     private execute(untilDepth: number): Value {
@@ -90,6 +99,10 @@ export class VM {
                     case 'DEFINE_GLOBAL': this.globals.set(instr.arg as string, this.pop()); break;
                     case 'GET_GLOBAL': {
                         const name = instr.arg as string;
+                        if (frame.moduleScope?.has(name)) {
+                            this.push(frame.moduleScope.get(name)!);
+                            break;
+                        }
                         if (!this.globals.has(name)) runtimeError(`Undefined name '${name}'`);
                         this.push(this.globals.get(name)!);
                         break;
@@ -99,6 +112,7 @@ export class VM {
                         const name = instr.arg as string;
                         if (name === 'self' && frame.receiver) { this.push(frame.receiver); break; }
                         if (!frame.locals.has(name)) {
+                            if (frame.moduleScope?.has(name)) { this.push(frame.moduleScope.get(name)!); break; }
                             if (this.globals.has(name)) { this.push(this.globals.get(name)!); break; }
                             runtimeError(`Undefined local '${name}'`);
                         }
@@ -292,7 +306,7 @@ export class VM {
         if ((callee as any)?.type === 'function') {
             const fn = callee as AuraFunction;
             const locals = this.buildLocals(fn, args);
-            this.pushFrame(fn.chunk, locals, fn.receiver);
+            this.pushFrame(fn.chunk, locals, fn.receiver, undefined, this.moduleScopeOf(fn));
             return;
         }
         if ((callee as any)?.type === 'class') {
@@ -303,7 +317,7 @@ export class VM {
             if (initFn) {
                 const locals = this.buildLocals(initFn, args);
                 locals.set('self', inst);
-                this.pushFrame(initFn.chunk, locals, inst, inst);
+                this.pushFrame(initFn.chunk, locals, inst, inst, this.moduleScopeOf(initFn));
             } else {
                 this.push(inst);
             }
@@ -331,7 +345,7 @@ export class VM {
             const inst = (obj as any)?.type === 'instance' ? obj as AuraInstance : undefined;
             const locals = this.buildLocals(fn, args);
             if (inst) locals.set('self', inst);
-            this.pushFrame(fn.chunk, locals, inst);
+            this.pushFrame(fn.chunk, locals, inst, undefined, this.moduleScopeOf(fn));
             return;
         }
         runtimeError(`'${method}' is not callable on ${auraToString(obj)}`);
@@ -346,7 +360,7 @@ export class VM {
             const locals = this.buildLocals(fn, args);
             if (fn.receiver) locals.set('self', fn.receiver);
             const baseDepth = this.frames.length;
-            this.pushFrame(fn.chunk, locals, fn.receiver);
+            this.pushFrame(fn.chunk, locals, fn.receiver, undefined, this.moduleScopeOf(fn));
             return this.execute(baseDepth);
         }
         runtimeError(`Expected callable, got ${auraToString(callee)}`);
@@ -363,19 +377,161 @@ export class VM {
     private getAttr(obj: Value, attr: string): Value {
         if (obj === null) runtimeError(`Cannot access '${attr}' on nil`);
         if (typeof obj === 'string') {
-            const strMethods: Record<string, (s: string) => Value> = {
-                len: s => s.length,
-                upper: s => s.toUpperCase(),
-                lower: s => s.toLowerCase(),
-                trim: s => s.trim(),
-                split: _ => ({ type: 'builtin', name: 'split', fn: ([sep]: Value[]) => ({ type: 'list', items: _.split(auraToString(sep)) } as AuraList) } as BuiltinFn),
+            const str = obj as string;
+            const words = (): string[] => str.match(/[A-Za-z0-9]+/g) ?? [];
+            const toTitle = (): string => {
+                const chunks = str.split(/([^A-Za-z0-9]+)/);
+                return chunks.map((chunk) => {
+                    if (!/^[A-Za-z0-9]+$/.test(chunk)) return chunk;
+                    return chunk[0].toUpperCase() + chunk.slice(1).toLowerCase();
+                }).join('');
             };
-            if (strMethods[attr]) {
-                const fn = strMethods[attr];
-                return { type: 'builtin', name: attr, fn: () => fn(obj as string) } as BuiltinFn;
-            }
+            const strMethods: Record<string, BuiltinFn> = {
+                len: this.builtin('string.len', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.len() takes no arguments');
+                    return str.length;
+                }),
+                is_empty: this.builtin('string.is_empty', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.is_empty() takes no arguments');
+                    return str.length === 0;
+                }),
+                upper: this.builtin('string.upper', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.upper() takes no arguments');
+                    return str.toUpperCase();
+                }),
+                lower: this.builtin('string.lower', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.lower() takes no arguments');
+                    return str.toLowerCase();
+                }),
+                trim: this.builtin('string.trim', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.trim() takes no arguments');
+                    return str.trim();
+                }),
+                split: this.builtin('string.split', (args: Value[]) => {
+                    if (args.length < 1 || args.length > 2) runtimeError('string.split(sep, limit?) expects 1 or 2 arguments');
+                    const sep = auraToString(args[0]);
+                    const limit = args.length === 2 ? Math.max(0, Math.trunc(this.asNumber(args[1], 'string.split'))) : undefined;
+                    return {
+                        type: 'list',
+                        items: limit === undefined ? str.split(sep) : str.split(sep, limit),
+                    } as AuraList;
+                }),
+                contains: this.builtin('string.contains', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.contains(substr) expects exactly 1 argument');
+                    return str.includes(auraToString(args[0]));
+                }),
+                starts_with: this.builtin('string.starts_with', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.starts_with(prefix) expects exactly 1 argument');
+                    return str.startsWith(auraToString(args[0]));
+                }),
+                ends_with: this.builtin('string.ends_with', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.ends_with(suffix) expects exactly 1 argument');
+                    return str.endsWith(auraToString(args[0]));
+                }),
+                index_of: this.builtin('string.index_of', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.index_of(substr) expects exactly 1 argument');
+                    return str.indexOf(auraToString(args[0]));
+                }),
+                last_index_of: this.builtin('string.last_index_of', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.last_index_of(substr) expects exactly 1 argument');
+                    return str.lastIndexOf(auraToString(args[0]));
+                }),
+                replace: this.builtin('string.replace', (args: Value[]) => {
+                    if (args.length !== 2) runtimeError('string.replace(from, to) expects exactly 2 arguments');
+                    const from = auraToString(args[0]);
+                    if (from.length === 0) runtimeError('string.replace(from, to) requires non-empty "from"');
+                    return str.split(from).join(auraToString(args[1]));
+                }),
+                repeat: this.builtin('string.repeat', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.repeat(n) expects exactly 1 argument');
+                    const count = Math.trunc(this.asNumber(args[0], 'string.repeat'));
+                    if (count < 0) runtimeError('string.repeat(n) requires n >= 0');
+                    return str.repeat(count);
+                }),
+                slice: this.builtin('string.slice', (args: Value[]) => {
+                    if (args.length < 1 || args.length > 2) runtimeError('string.slice(start, end?) expects 1 or 2 arguments');
+                    const start = Math.trunc(this.asNumber(args[0], 'string.slice'));
+                    if (args.length === 1) return str.slice(start);
+                    const end = Math.trunc(this.asNumber(args[1], 'string.slice'));
+                    return str.slice(start, end);
+                }),
+                char_at: this.builtin('string.char_at', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.char_at(index) expects exactly 1 argument');
+                    const idx = Math.trunc(this.asNumber(args[0], 'string.char_at'));
+                    const realIdx = idx < 0 ? str.length + idx : idx;
+                    if (realIdx < 0 || realIdx >= str.length) return null;
+                    return str[realIdx];
+                }),
+                chars: this.builtin('string.chars', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.chars() takes no arguments');
+                    return { type: 'list', items: [...str] } as AuraList;
+                }),
+                lines: this.builtin('string.lines', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.lines() takes no arguments');
+                    return { type: 'list', items: str.replace(/\r\n/g, '\n').split('\n') } as AuraList;
+                }),
+                pad_left: this.builtin('string.pad_left', (args: Value[]) => {
+                    if (args.length < 1 || args.length > 2) runtimeError('string.pad_left(width, fill?) expects 1 or 2 arguments');
+                    const width = Math.max(0, Math.trunc(this.asNumber(args[0], 'string.pad_left')));
+                    const fill = args.length === 2 ? auraToString(args[1]) : ' ';
+                    if (fill.length === 0) runtimeError('string.pad_left(width, fill?) requires non-empty fill');
+                    return str.padStart(width, fill);
+                }),
+                pad_right: this.builtin('string.pad_right', (args: Value[]) => {
+                    if (args.length < 1 || args.length > 2) runtimeError('string.pad_right(width, fill?) expects 1 or 2 arguments');
+                    const width = Math.max(0, Math.trunc(this.asNumber(args[0], 'string.pad_right')));
+                    const fill = args.length === 2 ? auraToString(args[1]) : ' ';
+                    if (fill.length === 0) runtimeError('string.pad_right(width, fill?) requires non-empty fill');
+                    return str.padEnd(width, fill);
+                }),
+                join: this.builtin('string.join', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.join(collection) expects exactly 1 argument');
+                    const it = makeIterator(args[0]);
+                    const out: string[] = [];
+                    while (true) {
+                        const next = iterNext(it);
+                        if (next === DONE) break;
+                        out.push(auraToString(next));
+                    }
+                    return out.join(str);
+                }),
+                title: this.builtin('string.title', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.title() takes no arguments');
+                    return toTitle();
+                }),
+                words: this.builtin('string.words', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.words() takes no arguments');
+                    return { type: 'list', items: words() } as AuraList;
+                }),
+                camel_case: this.builtin('string.camel_case', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.camel_case() takes no arguments');
+                    const parts = words().map((w) => w.toLowerCase());
+                    if (parts.length === 0) return '';
+                    return parts[0] + parts.slice(1).map((w) => w[0].toUpperCase() + w.slice(1)).join('');
+                }),
+                snake_case: this.builtin('string.snake_case', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.snake_case() takes no arguments');
+                    return words().map((w) => w.toLowerCase()).join('_');
+                }),
+                kebab_case: this.builtin('string.kebab_case', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('string.kebab_case() takes no arguments');
+                    return words().map((w) => w.toLowerCase()).join('-');
+                }),
+                remove_prefix: this.builtin('string.remove_prefix', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.remove_prefix(prefix) expects exactly 1 argument');
+                    const prefix = auraToString(args[0]);
+                    return str.startsWith(prefix) ? str.slice(prefix.length) : str;
+                }),
+                remove_suffix: this.builtin('string.remove_suffix', (args: Value[]) => {
+                    if (args.length !== 1) runtimeError('string.remove_suffix(suffix) expects exactly 1 argument');
+                    const suffix = auraToString(args[0]);
+                    return str.endsWith(suffix) ? str.slice(0, str.length - suffix.length) : str;
+                }),
+            };
+            if (strMethods[attr]) return strMethods[attr];
             runtimeError(`String has no attribute '${attr}'`);
         }
+        if ((obj as any)?.type === 'enum') return this.getEnumAttr(obj as AuraEnum, attr);
         if ((obj as any)?.type === 'instance') {
             const inst = obj as AuraInstance;
             if (attr === 'with') {
@@ -401,6 +557,22 @@ export class VM {
         if ((obj as any)?.type === 'module') return getModuleAttr(obj as AuraModule, attr);
         if ((obj as any)?.type === 'list') {
             const list = obj as AuraList;
+            const compareKeys = (a: Value, b: Value): number => {
+                if (typeof a === 'number' && typeof b === 'number') return a - b;
+                return auraToString(a).localeCompare(auraToString(b));
+            };
+            const flattenItems = (items: Value[], depth: number): Value[] => {
+                if (depth <= 0) return [...items];
+                const out: Value[] = [];
+                for (const item of items) {
+                    if ((item as any)?.type === 'list') {
+                        out.push(...flattenItems((item as AuraList).items, depth - 1));
+                    } else {
+                        out.push(item);
+                    }
+                }
+                return out;
+            };
             const listMethods: Record<string, () => Value> = {
                 len: () => list.items.length,
                 first: () => list.items.length > 0 ? list.items[0] : null,
@@ -427,6 +599,136 @@ export class VM {
                     }
                     return { type: 'list', items: out } as AuraList;
                 } } as BuiltinFn),
+                reduce: () => this.builtin('list.reduce', (args: Value[]) => {
+                    if (args.length !== 2) runtimeError('list.reduce(fn, init) expects exactly 2 arguments');
+                    const fn = args[0];
+                    let acc = args[1];
+                    for (let i = 0; i < list.items.length; i++) {
+                        acc = this.invokeCallable(fn, [acc, list.items[i], i, list]);
+                    }
+                    return acc;
+                }),
+                flat_map: () => this.builtin('list.flat_map', ([fn]: Value[]) => {
+                    const out: Value[] = [];
+                    for (let i = 0; i < list.items.length; i++) {
+                        const mapped = this.invokeCallable(fn, [list.items[i], i, list]);
+                        if ((mapped as any)?.type === 'list') out.push(...(mapped as AuraList).items);
+                        else out.push(mapped);
+                    }
+                    return { type: 'list', items: out } as AuraList;
+                }),
+                flatten: () => this.builtin('list.flatten', (args: Value[]) => {
+                    if (args.length > 1) runtimeError('list.flatten(depth?) expects at most 1 argument');
+                    const depth = args.length === 0 ? 1 : Math.max(0, Math.trunc(this.asNumber(args[0], 'list.flatten')));
+                    return { type: 'list', items: flattenItems(list.items, depth) } as AuraList;
+                }),
+                find: () => this.builtin('list.find', ([fn]: Value[]) => {
+                    for (let i = 0; i < list.items.length; i++) {
+                        const item = list.items[i];
+                        if (isTruthy(this.invokeCallable(fn, [item, i, list]))) return item;
+                    }
+                    return null;
+                }),
+                find_index: () => this.builtin('list.find_index', ([fn]: Value[]) => {
+                    for (let i = 0; i < list.items.length; i++) {
+                        if (isTruthy(this.invokeCallable(fn, [list.items[i], i, list]))) return i;
+                    }
+                    return -1;
+                }),
+                any: () => this.builtin('list.any', ([fn]: Value[]) => {
+                    for (let i = 0; i < list.items.length; i++) {
+                        if (isTruthy(this.invokeCallable(fn, [list.items[i], i, list]))) return true;
+                    }
+                    return false;
+                }),
+                all: () => this.builtin('list.all', ([fn]: Value[]) => {
+                    for (let i = 0; i < list.items.length; i++) {
+                        if (!isTruthy(this.invokeCallable(fn, [list.items[i], i, list]))) return false;
+                    }
+                    return true;
+                }),
+                count: () => this.builtin('list.count', ([fn]: Value[]) => {
+                    let total = 0;
+                    for (let i = 0; i < list.items.length; i++) {
+                        if (isTruthy(this.invokeCallable(fn, [list.items[i], i, list]))) total++;
+                    }
+                    return total;
+                }),
+                group_by: () => this.builtin('list.group_by', ([fn]: Value[]) => {
+                    const grouped = new Map<string, Value>();
+                    for (let i = 0; i < list.items.length; i++) {
+                        const item = list.items[i];
+                        const key = auraToString(this.invokeCallable(fn, [item, i, list]));
+                        const current = grouped.get(key);
+                        if ((current as any)?.type === 'list') {
+                            (current as AuraList).items.push(item);
+                        } else {
+                            grouped.set(key, { type: 'list', items: [item] } as AuraList);
+                        }
+                    }
+                    return { type: 'map', entries: grouped } as AuraMap;
+                }),
+                key_by: () => this.builtin('list.key_by', ([fn]: Value[]) => {
+                    const keyed = new Map<string, Value>();
+                    for (let i = 0; i < list.items.length; i++) {
+                        const item = list.items[i];
+                        const key = auraToString(this.invokeCallable(fn, [item, i, list]));
+                        keyed.set(key, item);
+                    }
+                    return { type: 'map', entries: keyed } as AuraMap;
+                }),
+                sort_by: () => this.builtin('list.sort_by', ([fn]: Value[]) => {
+                    const rows = list.items.map((item, i) => ({ item, key: this.invokeCallable(fn, [item, i, list]), i }));
+                    rows.sort((a, b) => {
+                        const cmp = compareKeys(a.key, b.key);
+                        if (cmp !== 0) return cmp;
+                        return a.i - b.i;
+                    });
+                    return { type: 'list', items: rows.map((r) => r.item) } as AuraList;
+                }),
+                min_by: () => this.builtin('list.min_by', ([fn]: Value[]) => {
+                    if (list.items.length === 0) return null;
+                    let bestItem = list.items[0];
+                    let bestKey = this.invokeCallable(fn, [bestItem, 0, list]);
+                    for (let i = 1; i < list.items.length; i++) {
+                        const item = list.items[i];
+                        const key = this.invokeCallable(fn, [item, i, list]);
+                        if (compareKeys(key, bestKey) < 0) {
+                            bestItem = item;
+                            bestKey = key;
+                        }
+                    }
+                    return bestItem;
+                }),
+                max_by: () => this.builtin('list.max_by', ([fn]: Value[]) => {
+                    if (list.items.length === 0) return null;
+                    let bestItem = list.items[0];
+                    let bestKey = this.invokeCallable(fn, [bestItem, 0, list]);
+                    for (let i = 1; i < list.items.length; i++) {
+                        const item = list.items[i];
+                        const key = this.invokeCallable(fn, [item, i, list]);
+                        if (compareKeys(key, bestKey) > 0) {
+                            bestItem = item;
+                            bestKey = key;
+                        }
+                    }
+                    return bestItem;
+                }),
+                zip: () => this.builtin('list.zip', ([other]: Value[]) => {
+                    const it = makeIterator(other);
+                    const pairs: Value[] = [];
+                    for (let i = 0; i < list.items.length; i++) {
+                        const next = iterNext(it);
+                        if (next === DONE) break;
+                        pairs.push({ type: 'list', items: [list.items[i], next] } as AuraList);
+                    }
+                    return { type: 'list', items: pairs } as AuraList;
+                }),
+                enumerate: () => this.builtin('list.enumerate', (args: Value[]) => {
+                    if (args.length !== 0) runtimeError('list.enumerate() takes no arguments');
+                    const pairs = list.items.map((item, i) => ({ type: 'list', items: [i, item] } as AuraList));
+                    return { type: 'list', items: pairs } as AuraList;
+                }),
             };
             if (attr in listMethods) {
                 const v = listMethods[attr]();
@@ -438,6 +740,101 @@ export class VM {
             return this.getNativeAttr(obj as AuraNative, attr);
         }
         runtimeError(`Cannot get attribute '${attr}' on ${auraToString(obj)}`);
+    }
+
+    private getEnumAttr(value: AuraEnum, attr: string): Value {
+        const isOption = value.tag === 'some' || value.tag === 'none';
+        const isResult = value.tag === 'ok' || value.tag === 'error';
+        const first = (): Value => value.values.length > 0 ? value.values[0] : null;
+        const some = (v: Value): AuraEnum => ({ type: 'enum', tag: 'some', values: [v] });
+        const none = (): AuraEnum => ({ type: 'enum', tag: 'none', values: [] });
+        const ok = (v: Value): AuraEnum => ({ type: 'enum', tag: 'ok', values: [v] });
+        const err = (v: Value): AuraEnum => ({ type: 'enum', tag: 'error', values: [v] });
+
+        const methods: Record<string, () => Value> = {
+            tag: () => value.tag,
+            values: () => ({ type: 'list', items: [...value.values] } as AuraList),
+        };
+
+        if (isOption) {
+            methods.is_some = () => value.tag === 'some';
+            methods.is_none = () => value.tag === 'none';
+            methods.unwrap = () => {
+                if (value.tag !== 'some') runtimeError('Called unwrap() on None');
+                return first();
+            };
+            methods.unwrap_or = () => this.builtin('option.unwrap_or', ([fallback]: Value[]) => value.tag === 'some' ? first() : (fallback ?? null));
+            methods.expect = () => this.builtin('option.expect', ([msg]: Value[]) => {
+                if (value.tag === 'some') return first();
+                runtimeError(auraToString(msg ?? 'Expected Some, got None'));
+            });
+            methods.map = () => this.builtin('option.map', ([fn]: Value[]) => {
+                if (value.tag !== 'some') return none();
+                return some(this.invokeCallable(fn, [first()]));
+            });
+            methods.and_then = () => this.builtin('option.and_then', ([fn]: Value[]) => {
+                if (value.tag !== 'some') return none();
+                return this.invokeCallable(fn, [first()]);
+            });
+            methods.filter = () => this.builtin('option.filter', ([fn]: Value[]) => {
+                if (value.tag !== 'some') return none();
+                return isTruthy(this.invokeCallable(fn, [first()])) ? value : none();
+            });
+            methods.or_else = () => this.builtin('option.or_else', ([fn]: Value[]) => value.tag === 'some' ? value : this.invokeCallable(fn, []));
+            methods.ok_or = () => this.builtin('option.ok_or', ([errorValue]: Value[]) => value.tag === 'some' ? ok(first()) : err(errorValue ?? null));
+            methods.or = () => this.builtin('option.or', ([fallback]: Value[]) => {
+                if (value.tag === 'some') return value;
+                if ((fallback as any)?.type === 'enum') {
+                    const e = fallback as AuraEnum;
+                    if (e.tag === 'some' || e.tag === 'none') return fallback;
+                }
+                if (fallback === null) return none();
+                return some(fallback);
+            });
+            methods.tap = () => this.builtin('option.tap', ([fn]: Value[]) => {
+                if (value.tag === 'some') this.invokeCallable(fn, [first()]);
+                return value;
+            });
+        }
+
+        if (isResult) {
+            methods.is_ok = () => value.tag === 'ok';
+            methods.is_err = () => value.tag === 'error';
+            methods.unwrap = () => {
+                if (value.tag !== 'ok') runtimeError(`Called unwrap() on Err(${auraToString(first())})`);
+                return first();
+            };
+            methods.unwrap_err = () => {
+                if (value.tag !== 'error') runtimeError('Called unwrap_err() on Ok');
+                return first();
+            };
+            methods.unwrap_or = () => this.builtin('result.unwrap_or', ([fallback]: Value[]) => value.tag === 'ok' ? first() : (fallback ?? null));
+            methods.expect = () => this.builtin('result.expect', ([msg]: Value[]) => {
+                if (value.tag === 'ok') return first();
+                runtimeError(auraToString(msg ?? `Expected Ok, got Err(${auraToString(first())})`));
+            });
+            methods.map = () => this.builtin('result.map', ([fn]: Value[]) => value.tag === 'ok' ? ok(this.invokeCallable(fn, [first()])) : value);
+            methods.map_err = () => this.builtin('result.map_err', ([fn]: Value[]) => value.tag === 'error' ? err(this.invokeCallable(fn, [first()])) : value);
+            methods.and_then = () => this.builtin('result.and_then', ([fn]: Value[]) => value.tag === 'ok' ? this.invokeCallable(fn, [first()]) : value);
+            methods.or_else = () => this.builtin('result.or_else', ([fn]: Value[]) => value.tag === 'error' ? this.invokeCallable(fn, [first()]) : value);
+            methods.tap = () => this.builtin('result.tap', ([fn]: Value[]) => {
+                if (value.tag === 'ok') this.invokeCallable(fn, [first()]);
+                return value;
+            });
+            methods.tap_err = () => this.builtin('result.tap_err', ([fn]: Value[]) => {
+                if (value.tag === 'error') this.invokeCallable(fn, [first()]);
+                return value;
+            });
+            methods.recover = () => this.builtin('result.recover', ([fn]: Value[]) => value.tag === 'ok' ? value : ok(this.invokeCallable(fn, [first()])));
+            methods.to_option = () => this.builtin('result.to_option', (args: Value[]) => {
+                if (args.length !== 0) runtimeError('result.to_option() takes no arguments');
+                return value.tag === 'ok' ? some(first()) : none();
+            });
+        }
+
+        if (!(attr in methods)) runtimeError(`Enum has no attribute '${attr}'`);
+        const out = methods[attr]();
+        return (out as any)?.type === 'builtin' ? out : this.builtin(`enum.${attr}`, () => out);
     }
 
     private getNativeAttr(native: AuraNative, attr: string): Value {
@@ -972,7 +1369,13 @@ export class VM {
         return trace;
     }
 
-    private pushFrame(chunk: Chunk, locals: Map<string, Value>, receiver?: AuraInstance, constructing?: AuraInstance): void {
+    private pushFrame(
+        chunk: Chunk,
+        locals: Map<string, Value>,
+        receiver?: AuraInstance,
+        constructing?: AuraInstance,
+        moduleScope?: Map<string, Value>,
+    ): void {
         this.frames.push({
             chunk,
             ip: 0,
@@ -981,7 +1384,14 @@ export class VM {
             constructing,
             fnName: chunk.name,
             file: chunk.file,
+            moduleScope,
         });
+    }
+
+    private moduleScopeOf(fn: AuraFunction): Map<string, Value> | undefined {
+        const scope = (fn as any).moduleScope;
+        if (scope instanceof Map) return scope as Map<string, Value>;
+        return undefined;
     }
 
     private push(v: Value): void { this.stack.push(v); }

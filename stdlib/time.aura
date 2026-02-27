@@ -1,0 +1,89 @@
+module std.time
+
+fn ms(n: Int = 1) -> Int:
+    return n
+
+fn sec(n: Int = 1) -> Int:
+    return n * 1000
+
+fn min(n: Int = 1) -> Int:
+    return sec(60 * n)
+
+fn hour(n: Int = 1) -> Int:
+    return min(60 * n)
+
+fn day(n: Int = 1) -> Int:
+    return hour(24 * n)
+
+fn week(n: Int = 1) -> Int:
+    return day(7 * n)
+
+fn now_ms() -> Int:
+    return __time_now_ms()
+
+fn now_unix_s() -> Int:
+    return __time_now_unix_s()
+
+fn now_iso() -> String:
+    return __time_iso_now()
+
+fn monotonic_ms() -> Int:
+    return __time_monotonic_ms()
+
+fn sleep_ms(duration_ms: Int):
+    __time_sleep_ms(duration_ms)
+
+fn sleep_sec(duration_sec: Int):
+    __time_sleep_ms(sec(duration_sec))
+
+fn sleep_until_ms(target_ms: Int):
+    let remaining = target_ms - now_ms()
+    if remaining > 0:
+        sleep_ms(remaining)
+
+fn parse_iso(value: String) -> Int:
+    return __time_parse_iso(value)
+
+fn from_unix_ms(ms_value: Int) -> String:
+    return __time_from_unix_ms(ms_value)
+
+fn from_unix_s(sec_value: Int) -> String:
+    return __time_from_unix_s(sec_value)
+
+fn to_unix_s(ms_value: Int) -> Int:
+    return __time_to_unix_s(ms_value)
+
+fn add_ms(ms_value: Int, delta_ms: Int) -> Int:
+    return __time_add_ms(ms_value, delta_ms)
+
+fn add_sec(ms_value: Int, delta_sec: Int) -> Int:
+    return add_ms(ms_value, sec(delta_sec))
+
+fn diff_ms(a: Int, b: Int) -> Int:
+    return __time_diff_ms(a, b)
+
+fn elapsed_ms(start_ms: Int) -> Int:
+    return diff_ms(now_ms(), start_ms)
+
+fn since(start_ms: Int) -> Int:
+    return elapsed_ms(start_ms)
+
+fn until(target_ms: Int) -> Int:
+    return diff_ms(target_ms, now_ms())
+
+fn parts(ms_value = nil):
+    if ms_value == nil:
+        return __time_parts(now_ms())
+    return __time_parts(ms_value)
+
+fn timer_start() -> Int:
+    return monotonic_ms()
+
+fn timer_stop(start_tick: Int) -> Int:
+    return diff_ms(monotonic_ms(), start_tick)
+
+fn profile(fn_ref):
+    let start_tick = timer_start()
+    let value = fn_ref()
+    let elapsed = timer_stop(start_tick)
+    return {"value": value, "elapsed_ms": elapsed}

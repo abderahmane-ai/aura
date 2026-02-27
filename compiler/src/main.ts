@@ -114,6 +114,19 @@ function collectExports(ast: Program): string[] {
     return [...exports];
 }
 
+function bindModuleScope(value: Value, scope: Map<string, Value>): void {
+    if ((value as any)?.type === 'function') {
+        (value as any).moduleScope = scope;
+        return;
+    }
+    if ((value as any)?.type === 'class') {
+        const klass = value as any;
+        for (const method of klass.methods.values()) {
+            if ((method as any)?.type === 'function') (method as any).moduleScope = scope;
+        }
+    }
+}
+
 function moduleName(ast: Program, fallbackFile: string): string {
     for (const node of ast.body) {
         if (node.kind === 'ModuleStmt') return node.path;
@@ -165,6 +178,7 @@ function executeModule(file: string, state: ModuleState, vm: VM, isEntry = false
         throw new AuraError(`Cyclic import detected at '${file}'`, file, 0, 0, 'Compiler');
     }
     state.loading.add(file);
+    const globalsBefore = isEntry ? null : vm.snapshotGlobals();
     try {
         for (const imp of rec.imports) {
             const depPath = resolveImportPath(file, imp.path);
@@ -177,13 +191,26 @@ function executeModule(file: string, state: ModuleState, vm: VM, isEntry = false
         vm.run(chunk);
 
         const attrs = new Map<string, Value>();
+        const moduleScope = new Map<string, Value>();
+        for (const imp of rec.imports) {
+            const alias = importBindingName(imp);
+            if (vm.hasGlobal(alias)) moduleScope.set(alias, vm.getGlobal(alias)!);
+        }
         for (const name of rec.exportNames) {
-            if (vm.hasGlobal(name)) attrs.set(name, vm.getGlobal(name)!);
+            if (vm.hasGlobal(name)) {
+                const value = vm.getGlobal(name)!;
+                attrs.set(name, value);
+                moduleScope.set(name, value);
+            }
+        }
+        for (const value of attrs.values()) {
+            bindModuleScope(value, moduleScope);
         }
         rec.moduleValue = { type: 'module', name: rec.moduleName, attrs };
         rec.executed = true;
         return rec;
     } finally {
+        if (globalsBefore) vm.restoreGlobals(globalsBefore);
         state.loading.delete(file);
     }
 }

@@ -1,3 +1,4 @@
+import std.io as io
 unit Time:
     base: ms
     sec = ms * 1000
@@ -13,6 +14,17 @@ constraint DiscountRate(value: Float64):
 
 fn apply_discount(price: Price, rate: DiscountRate) -> Float64:
     return price * (1 - rate)
+
+fn parse_port(raw: String):
+    let cleaned = raw.trim()
+    if cleaned.len() == 0:
+        return None()
+    return Some(int(cleaned))
+
+fn divide_checked(a: Float64, b: Float64):
+    if b == 0:
+        return Err("division by zero")
+    return Ok(a / b)
 
 fn main():
     io.println("=== Data Types ===")
@@ -32,6 +44,23 @@ fn main():
     let letter = 'A'
     let language = "Aura"
     let greeting = "Hello from {language}"
+    let raw_path = "  /API/v1/users  "
+    let normalized_path = raw_path.trim().lower()
+    let path_parts = normalized_path.split("/")
+    let has_users = normalized_path.contains("users")
+    let first_slice = normalized_path.slice(0, 6)
+    let padded = "7".pad_left(3, "0")
+    let csv = ",".join(["red", "green", "blue"])
+    let initials = "Aura".chars()
+    let rows = "alpha\nbeta\ngamma".lines()
+    let phrase = "  developers need small smart tools  "
+    let phrase_title = phrase.title()
+    let phrase_words = phrase.words()
+    let phrase_camel = phrase.camel_case()
+    let phrase_snake = phrase.snake_case()
+    let phrase_kebab = phrase.kebab_case()
+    let no_std = "std.math".remove_prefix("std.")
+    let no_csv = "report.csv".remove_suffix(".csv")
 
     # nil
     let optional_value = nil
@@ -42,6 +71,24 @@ fn main():
     scores[1] = 99
     scores.append(40)
     io.println("scores (mutated)={scores}")
+    let nums = [1, 2, 3, 4, 5]
+    let reduced = nums.reduce(fn(acc: Int, x: Int) = acc + x, 0)
+    let expanded = nums.flat_map(fn(x: Int) = [x, x * 10])
+    let nested = [[1, 2], [3], [4, [5, 6]]]
+    let flatten_once = nested.flatten()
+    let flatten_twice = nested.flatten(2)
+    let first_even = nums.find(fn(x: Int) = x % 2 == 0)
+    let first_even_index = nums.find_index(fn(x: Int) = x % 2 == 0)
+    let has_gt4 = nums.any(fn(x: Int) = x > 4)
+    let all_positive = nums.all(fn(x: Int) = x > 0)
+    let even_count = nums.count(fn(x: Int) = x % 2 == 0)
+    let grouped = nums.group_by(fn(x: Int) = x % 2)
+    let keyed = nums.key_by(fn(x: Int) = "k{x}")
+    let sorted_by_abs = [3, -1, 2, -4].sort_by(fn(x: Int) = abs(x))
+    let min_abs = [3, -1, 2, -4].min_by(fn(x: Int) = abs(x))
+    let max_abs = [3, -1, 2, -4].max_by(fn(x: Int) = abs(x))
+    let zipped = nums.zip(["a", "b", "c"])
+    let enumed = ["x", "y", "z"].enumerate()
 
     # Maps
     let user = {"id": 1001, "name": "Maya", "admin": true}
@@ -68,14 +115,61 @@ fn main():
     let price: Price = 1200
     let rate: DiscountRate = 0.15
     let final_price = apply_discount(price, rate)
+    let maybe_port: Option = parse_port(" 8080 ")
+    let missing_port: Option = parse_port("   ")
+    let resolved_port = maybe_port.unwrap_or(3000)
+    let fallback_port = missing_port.unwrap_or(3000)
+    let next_port = maybe_port.map(fn(p: Int) = p + 1).unwrap_or(0)
+    let defaulted_port = missing_port.or(9090).unwrap_or(0)
+    let port_result = missing_port.ok_or("port missing")
+    maybe_port.tap(fn(v: Int) = io.println("option tap value={v}"))
+    let ok_div: Result = divide_checked(12, 4)
+    let bad_div: Result = divide_checked(12, 0)
+    let safe_bad_div = bad_div.unwrap_or(-1)
+    let recovered_div = bad_div.or_else(fn(err) = Ok(0)).unwrap()
+    ok_div.tap(fn(v: Float64) = io.println("result tap ok={v}"))
+    bad_div.tap_err(fn(msg: String) = io.println("result tap_err={msg}"))
+    let recovered_v2 = bad_div.recover(fn(msg: String) = 1).unwrap()
+    let ok_as_option = ok_div.to_option()
 
     io.println("decimal_int={decimal_int} big_int={big_int}")
     io.println("hex={hex_value} binary={binary_value} pi={pi}")
     io.println("ready={ready} failed={failed}")
     io.println("letter={letter} greeting={greeting}")
+    io.println("normalized_path={normalized_path} parts={path_parts}")
+    io.println("has_users={has_users} first_slice={first_slice} padded={padded}")
+    io.println("csv={csv} initials={initials} rows={rows}")
+    io.println("title={phrase_title} words={phrase_words}")
+    io.println("camel={phrase_camel} snake={phrase_snake} kebab={phrase_kebab}")
+    io.println("no_std={no_std} no_csv={no_csv}")
     io.println("optional_value={optional_value}")
     io.println("point={point}")
+    io.println("reduce={reduced} expanded={expanded}")
+    io.println("flatten1={flatten_once} flatten2={flatten_twice}")
+    io.println("find={first_even} find_index={first_even_index}")
+    io.println("any={has_gt4} all={all_positive} count_even={even_count}")
+    io.println("grouped={grouped} keyed={keyed}")
+    io.println("sort_by_abs={sorted_by_abs} min_abs={min_abs} max_abs={max_abs}")
+    io.println("zipped={zipped} enumerate={enumed}")
     io.println("str/int/float -> {number_as_text}, {parsed_int}, {parsed_float}")
     io.println("is_equal={is_equal} is_large={is_large}")
     io.println("total_time={total_time}")
     io.println("price={price} rate={rate} final_price={final_price}")
+    io.println("maybe_port={maybe_port} resolved_port={resolved_port} next_port={next_port}")
+    io.println("missing_port={missing_port} fallback_port={fallback_port} defaulted_port={defaulted_port}")
+    io.println("port_result={port_result}")
+    io.println("ok_div={ok_div} bad_div={bad_div} safe_bad_div={safe_bad_div} recovered_div={recovered_div} recovered_v2={recovered_v2}")
+    io.println("ok_as_option={ok_as_option}")
+
+    match bad_div:
+        case .ok(v):
+            io.println("bad_div ok={v}")
+        case .error(msg):
+            io.println("bad_div error={msg}")
+
+    match missing_port:
+        case .some(port):
+            io.println("missing_port some={port}")
+        case .none:
+            io.println("missing_port is none")
+

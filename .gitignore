@@ -21,6 +21,9 @@ release/
 editor/vscode/.npm-cache/
 *.tmp
 .permission_check.tmp
+debug.log
+**/roguelike_save.json
+tests/_tmp_conformance/
 
 # IDE/editor
 .idea/
