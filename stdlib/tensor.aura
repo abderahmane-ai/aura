@@ -1,0 +1,413 @@
+module std.tensor
+
+fn tensor(value):
+    return Tensor(value)
+
+fn from_shape(shape, fill: Float64 = 0.0):
+    return TensorShape(shape, fill)
+
+fn full(shape, value: Float64):
+    return TensorShape(shape, value)
+
+fn zeros(shape):
+    return TensorShape(shape, 0.0)
+
+fn ones(shape):
+    return TensorShape(shape, 1.0)
+
+fn rand(shape, min: Float64 = 0.0, max: Float64 = 1.0):
+    return TensorRand(shape, min, max)
+
+fn randn(shape, mean: Float64 = 0.0, std: Float64 = 1.0):
+    return TensorRandn(shape, mean, std)
+
+fn eye(n: Int, m: Int = -1):
+    if m < 0:
+        return TensorEye(n)
+    return TensorEye(n, m)
+
+fn zeros_like(t):
+    return TensorShape(t.shape(), 0.0)
+
+fn ones_like(t):
+    return TensorShape(t.shape(), 1.0)
+
+fn full_like(t, value: Float64):
+    return TensorShape(t.shape(), value)
+
+fn shape(t):
+    return t.shape()
+
+fn rank(t):
+    return t.rank()
+
+fn len(t):
+    return t.len()
+
+fn to_list(t):
+    return t.to_list()
+
+fn to_flat_list(t):
+    return t.to_flat_list()
+
+fn clone(t):
+    return t.clone()
+
+fn flatten(t):
+    return t.flatten()
+
+fn reshape(t, shape):
+    return t.reshape(shape)
+
+fn transpose(t):
+    return t.transpose()
+
+fn get(t, i: Int):
+    return t.get(i)
+
+fn set(t, i: Int, value: Float64):
+    return t.set(i, value)
+
+fn at(t, i: Int):
+    return t.at(i)
+
+fn at2(t, i: Int, j: Int):
+    return t.at(i, j)
+
+fn at3(t, i: Int, j: Int, k: Int):
+    return t.at(i, j, k)
+
+fn set_at(t, i: Int, value: Float64):
+    return t.set_at(i, value)
+
+fn set_at2(t, i: Int, j: Int, value: Float64):
+    return t.set_at(i, j, value)
+
+fn set_at3(t, i: Int, j: Int, k: Int, value: Float64):
+    return t.set_at(i, j, k, value)
+
+fn sum(t):
+    return t.sum()
+
+fn mean(t):
+    return t.mean()
+
+fn min(t):
+    return t.min()
+
+fn max(t):
+    return t.max()
+
+fn argmin(t):
+    return t.argmin()
+
+fn argmax(t):
+    return t.argmax()
+
+fn variance(t, sample: Bool = false):
+    return t.variance(sample)
+
+fn std(t, sample: Bool = false):
+    return t.std(sample)
+
+fn sum_axis(t, axis: Int = -1):
+    return t.sum_axis(axis)
+
+fn mean_axis(t, axis: Int = -1):
+    return t.mean_axis(axis)
+
+fn map(t, fn_ref):
+    return t.map(fn_ref)
+
+fn zip_map(a, b, fn_ref):
+    return a.zip_map(b, fn_ref)
+
+fn add(a, b):
+    return a.add(b)
+
+fn sub(a, b):
+    return a.sub(b)
+
+fn mul(a, b):
+    return a.mul(b)
+
+fn div(a, b):
+    return a.div(b)
+
+fn add_(a, b):
+    return a.add_(b)
+
+fn sub_(a, b):
+    return a.sub_(b)
+
+fn mul_(a, b):
+    return a.mul_(b)
+
+fn div_(a, b):
+    return a.div_(b)
+
+fn fill_(t, value: Float64):
+    return t.fill_(value)
+
+fn exp(t):
+    return t.exp()
+
+fn log(t):
+    return t.log()
+
+fn sigmoid(t):
+    return t.sigmoid()
+
+fn relu(t):
+    return t.relu()
+
+fn tanh(t):
+    return t.tanh()
+
+fn abs(t):
+    return t.abs()
+
+fn sqrt(t):
+    return t.sqrt()
+
+fn pow(t, p):
+    return t.pow(p)
+
+fn clip(t, min: Float64, max: Float64):
+    return t.clip(min, max)
+
+fn l2_norm(t):
+    return t.l2_norm()
+
+fn normalize(t, eps: Float64 = 0.000000000001):
+    return t.normalize(eps)
+
+fn standardize(t, eps: Float64 = 0.000000000001):
+    let mu = t.mean()
+    let sigma = t.std()
+    return t.sub(mu).div(sigma + eps)
+
+fn min_max_scale(t, eps: Float64 = 0.000000000001):
+    let lo = t.min()
+    let hi = t.max()
+    return t.sub(lo).div((hi - lo) + eps)
+
+fn softmax(t, axis: Int = -1):
+    return t.softmax(axis)
+
+fn log_softmax(t, axis: Int = -1):
+    return t.log_softmax(axis)
+
+fn dot(a, b):
+    return a.dot(b)
+
+fn matmul(a, b):
+    return a.matmul(b)
+
+fn mse_loss(pred, target):
+    return pred.mse_loss(target)
+
+fn bce_loss(pred, target, eps: Float64 = 0.000000000001):
+    return pred.bce_loss(target, eps)
+
+fn bce_with_logits(logits, target, eps: Float64 = 0.000000000001):
+    return logits.sigmoid().bce_loss(target, eps)
+
+fn nll_loss(log_probs, target):
+    let lp = tensor(log_probs)
+    let y = __ensure_one_hot_target(target, lp)
+    return __nll_from_log_probs(lp, y)
+
+fn cross_entropy_loss(pred, target, eps: Float64 = 0.000000000001):
+    let probs = tensor(pred).clip(eps, 1.0)
+    return nll_loss(probs.log(), target)
+
+fn cross_entropy_with_logits(logits, target, axis: Int = -1):
+    let lp = tensor(logits).log_softmax(axis)
+    if axis == 0 and lp.rank() == 2:
+        let y = tensor(target)
+        if y.rank() != 2 or not __same_shape(y.shape(), lp.shape()):
+            panic("tensor.cross_entropy_with_logits(axis=0) expects one-hot target with same shape as logits")
+        return y.mul(lp).sum_axis(0).mul(-1).mean()
+    return nll_loss(lp, target)
+
+fn binary_accuracy(pred, target, threshold: Float64 = 0.5):
+    let p = tensor(pred).to_flat_list()
+    let y = tensor(target).to_flat_list()
+    if len(p) != len(y):
+        panic("tensor.binary_accuracy expects same number of elements")
+    if len(p) == 0:
+        return 0.0
+    var correct = 0
+    var i = 0
+    while i < len(p):
+        var pred_label = 0
+        if p[i] >= threshold:
+            pred_label = 1
+        let target_label = int(y[i])
+        if pred_label == target_label:
+            correct += 1
+        i += 1
+    return correct / len(p)
+
+fn classification_accuracy(scores, target):
+    let s = tensor(scores)
+    if s.rank() != 2:
+        panic("tensor.classification_accuracy expects rank-2 scores tensor [batch, classes]")
+    let rows = s.shape()[0]
+    let cols = s.shape()[1]
+    if rows == 0:
+        return 0.0
+    let labels = __class_indices(target, rows, cols)
+    let matrix = s.to_list()
+    var correct = 0
+    var r = 0
+    while r < rows:
+        let pred = __argmax_row(matrix[r], cols)
+        if pred == labels[r]:
+            correct += 1
+        r += 1
+    return correct / rows
+
+fn xavier_uniform(shape, fan_in: Int, fan_out: Int):
+    if fan_in <= 0 or fan_out <= 0:
+        panic("tensor.xavier_uniform expects fan_in > 0 and fan_out > 0")
+    let bound = (6.0 / (fan_in + fan_out)) ** 0.5
+    return rand(shape, -bound, bound)
+
+fn xavier_normal(shape, fan_in: Int, fan_out: Int):
+    if fan_in <= 0 or fan_out <= 0:
+        panic("tensor.xavier_normal expects fan_in > 0 and fan_out > 0")
+    let std = (2.0 / (fan_in + fan_out)) ** 0.5
+    return randn(shape, 0.0, std)
+
+fn he_uniform(shape, fan_in: Int):
+    if fan_in <= 0:
+        panic("tensor.he_uniform expects fan_in > 0")
+    let bound = (6.0 / fan_in) ** 0.5
+    return rand(shape, -bound, bound)
+
+fn he_normal(shape, fan_in: Int):
+    if fan_in <= 0:
+        panic("tensor.he_normal expects fan_in > 0")
+    let std = (2.0 / fan_in) ** 0.5
+    return randn(shape, 0.0, std)
+
+fn arange(start: Float64, end = nil, step: Float64 = 1.0):
+    var begin = start
+    var stop = end
+    if end == nil:
+        begin = 0.0
+        stop = start
+    if step == 0:
+        panic("tensor.arange expects non-zero step")
+    let out = []
+    var x = begin
+    if step > 0:
+        while x < stop:
+            out.push(x)
+            x += step
+    else:
+        while x > stop:
+            out.push(x)
+            x += step
+    return Tensor(out)
+
+fn linspace(start: Float64, stop: Float64, n: Int):
+    if n <= 0:
+        panic("tensor.linspace expects n > 0")
+    if n == 1:
+        return Tensor([start])
+    let out = []
+    let step = (stop - start) / (n - 1)
+    var i = 0
+    while i < n:
+        out.push(start + i * step)
+        i += 1
+    return Tensor(out)
+
+fn one_hot(indices, num_classes: Int):
+    if num_classes <= 0:
+        panic("tensor.one_hot expects num_classes > 0")
+    let values = tensor(indices).to_flat_list()
+    let rows = []
+    for idx in values:
+        let i = int(idx)
+        if i < 0 or i >= num_classes:
+            panic("tensor.one_hot index out of range")
+        let row = []
+        var c = 0
+        while c < num_classes:
+            if c == i:
+                row.push(1.0)
+            else:
+                row.push(0.0)
+            c += 1
+        rows.push(row)
+    return Tensor(rows)
+
+fn __same_shape(a, b):
+    if len(a) != len(b):
+        return false
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            return false
+        i += 1
+    return true
+
+fn __ensure_one_hot_target(target, pred):
+    let y = tensor(target)
+    if y.rank() == pred.rank():
+        if not __same_shape(y.shape(), pred.shape()):
+            panic("target one-hot tensor shape must match prediction shape")
+        return y
+    if pred.rank() == 2 and y.rank() == 1:
+        if y.shape()[0] != pred.shape()[0]:
+            panic("target index tensor length must match batch size")
+        return one_hot(y.to_flat_list(), pred.shape()[1])
+    if pred.rank() == 1 and y.rank() == 1 and y.len() == 1:
+        let oh = one_hot(y.to_flat_list(), pred.shape()[0]).to_list()
+        return tensor(oh[0])
+    panic("target must be one-hot with same shape, or class indices compatible with predictions")
+
+fn __nll_from_log_probs(log_probs, one_hot_target):
+    if log_probs.rank() == 1:
+        return -one_hot_target.mul(log_probs).sum()
+    if log_probs.rank() == 2:
+        return one_hot_target.mul(log_probs).sum_axis(1).mul(-1).mean()
+    panic("nll/cross-entropy currently supports rank-1 and rank-2 tensors")
+
+fn __argmax_row(row, cols: Int):
+    var best_i = 0
+    var best_v = row[0]
+    var c = 1
+    while c < cols:
+        if row[c] > best_v:
+            best_v = row[c]
+            best_i = c
+        c += 1
+    return best_i
+
+fn __class_indices(target, rows: Int, cols: Int):
+    let y = tensor(target)
+    let out = []
+    if y.rank() == 1:
+        if y.shape()[0] != rows:
+            panic("target index tensor length must match batch size")
+        for raw in y.to_flat_list():
+            let idx = int(raw)
+            if idx < 0 or idx >= cols:
+                panic("target index out of range")
+            out.push(idx)
+        return out
+    if y.rank() == 2:
+        if y.shape()[0] != rows or y.shape()[1] != cols:
+            panic("one-hot target shape must match scores shape")
+        let matrix = y.to_list()
+        var r = 0
+        while r < rows:
+            out.push(__argmax_row(matrix[r], cols))
+            r += 1
+        return out
+    panic("target must be rank-1 class indices or rank-2 one-hot tensor")

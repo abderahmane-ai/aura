@@ -20,10 +20,16 @@ interface NativeIndexedData {
     maps: Map<string, Map<string, number[]>>;
 }
 
+interface NativeTensorData {
+    shape: number[];
+    values: number[];
+}
+
 interface CallFrame {
     chunk: Chunk;
     ip: number;
     locals: Map<string, Value>;
+    localSlots?: Value[];
     receiver?: AuraInstance;
     constructing?: AuraInstance;
     fnName?: string;
@@ -120,6 +126,24 @@ export class VM {
                         break;
                     }
                     case 'SET_LOCAL': frame.locals.set(instr.arg as string, this.pop()); break;
+                    case 'GET_LOCAL_SLOT': {
+                        const slot = instr.arg as number;
+                        const slots = frame.localSlots;
+                        if (!slots || slot < 0 || slot >= slots.length) {
+                            runtimeError('Invalid local slot read ' + slot);
+                        }
+                        this.push(slots[slot] ?? null);
+                        break;
+                    }
+                    case 'SET_LOCAL_SLOT': {
+                        const slot = instr.arg as number;
+                        const slots = frame.localSlots;
+                        if (!slots || slot < 0 || slot >= slots.length) {
+                            runtimeError('Invalid local slot write ' + slot);
+                        }
+                        slots[slot] = this.pop();
+                        break;
+                    }
 
                     case 'ADD': { const b = this.pop(), a = this.pop(); this.push(this.add(a, b)); break; }
                     case 'SUB': { const b = this.pop(), a = this.pop(); this.push(this.sub(a, b)); break; }
@@ -305,8 +329,9 @@ export class VM {
         }
         if ((callee as any)?.type === 'function') {
             const fn = callee as AuraFunction;
-            const locals = this.buildLocals(fn, args);
-            this.pushFrame(fn.chunk, locals, fn.receiver, undefined, this.moduleScopeOf(fn));
+            const receiver = fn.receiver;
+            const bindings = this.buildFrameBindings(fn, args, receiver);
+            this.pushFrame(fn.chunk, bindings.locals, receiver, undefined, this.moduleScopeOf(fn), bindings.localSlots);
             return;
         }
         if ((callee as any)?.type === 'class') {
@@ -315,15 +340,14 @@ export class VM {
             for (const f of klass.fields) inst.fields.set(f.name, this.materializeDefault(f.defaultVal));
             const initFn = klass.methods.get('init');
             if (initFn) {
-                const locals = this.buildLocals(initFn, args);
-                locals.set('self', inst);
-                this.pushFrame(initFn.chunk, locals, inst, inst, this.moduleScopeOf(initFn));
+                const bindings = this.buildFrameBindings(initFn, args, inst);
+                this.pushFrame(initFn.chunk, bindings.locals, inst, inst, this.moduleScopeOf(initFn), bindings.localSlots);
             } else {
                 this.push(inst);
             }
             return;
         }
-        runtimeError(`Cannot call ${auraToString(callee)}`);
+        runtimeError('Cannot call ' + auraToString(callee));
     }
 
     private callMethod(obj: Value, method: string, args: Value[]): void {
@@ -335,6 +359,12 @@ export class VM {
             return;
         }
 
+        const fast = this.fastCallMethod(obj, method, args);
+        if (fast !== undefined) {
+            this.push(fast);
+            return;
+        }
+
         const attr = this.getAttr(obj, method);
         if ((attr as any)?.type === 'builtin') {
             this.push((attr as BuiltinFn).fn(args));
@@ -343,12 +373,12 @@ export class VM {
         if ((attr as any)?.type === 'function') {
             const fn = attr as AuraFunction;
             const inst = (obj as any)?.type === 'instance' ? obj as AuraInstance : undefined;
-            const locals = this.buildLocals(fn, args);
-            if (inst) locals.set('self', inst);
-            this.pushFrame(fn.chunk, locals, inst, undefined, this.moduleScopeOf(fn));
+            const receiver = inst ?? fn.receiver;
+            const bindings = this.buildFrameBindings(fn, args, receiver);
+            this.pushFrame(fn.chunk, bindings.locals, receiver, undefined, this.moduleScopeOf(fn), bindings.localSlots);
             return;
         }
-        runtimeError(`'${method}' is not callable on ${auraToString(obj)}`);
+        runtimeError("'" + method + "' is not callable on " + auraToString(obj));
     }
 
     private invokeCallable(callee: Value, args: Value[]): Value {
@@ -357,21 +387,142 @@ export class VM {
         }
         if ((callee as any)?.type === 'function') {
             const fn = callee as AuraFunction;
-            const locals = this.buildLocals(fn, args);
-            if (fn.receiver) locals.set('self', fn.receiver);
+            const receiver = fn.receiver;
+            const bindings = this.buildFrameBindings(fn, args, receiver);
             const baseDepth = this.frames.length;
-            this.pushFrame(fn.chunk, locals, fn.receiver, undefined, this.moduleScopeOf(fn));
+            this.pushFrame(fn.chunk, bindings.locals, receiver, undefined, this.moduleScopeOf(fn), bindings.localSlots);
             return this.execute(baseDepth);
         }
-        runtimeError(`Expected callable, got ${auraToString(callee)}`);
+        runtimeError('Expected callable, got ' + auraToString(callee));
     }
 
-    private buildLocals(fn: AuraFunction, args: Value[]): Map<string, Value> {
+    private buildFrameBindings(fn: AuraFunction, args: Value[], receiver?: AuraInstance): { locals: Map<string, Value>; localSlots?: Value[] } {
         const locals = new Map<string, Value>();
+        const slotCount = fn.localCount ?? 0;
+        const localSlots = slotCount > 0 ? new Array<Value>(slotCount).fill(null) : undefined;
+
         fn.params.forEach((p, i) => {
-            locals.set(p.name, i < args.length ? args[i] : this.materializeDefault(p.defaultVal));
+            const value = i < args.length ? args[i] : this.materializeDefault(p.defaultVal);
+            locals.set(p.name, value);
+            const slot = fn.paramSlots?.[i];
+            if (localSlots && slot !== undefined && slot >= 0 && slot < localSlots.length) {
+                localSlots[slot] = value;
+            }
         });
-        return locals;
+
+        if (receiver) {
+            locals.set('self', receiver);
+            const selfSlot = fn.selfSlot;
+            if (localSlots && selfSlot !== undefined && selfSlot >= 0 && selfSlot < localSlots.length) {
+                localSlots[selfSlot] = receiver;
+            }
+        }
+
+        return { locals, localSlots };
+    }
+
+    private fastCallMethod(obj: Value, method: string, args: Value[]): Value | undefined {
+        if (typeof obj === 'string') return this.fastCallStringMethod(obj, method, args);
+        if ((obj as any)?.type === 'list') return this.fastCallListMethod(obj as AuraList, method, args);
+        return undefined;
+    }
+
+    private fastCallStringMethod(str: string, method: string, args: Value[]): Value | undefined {
+        switch (method) {
+            case 'len':
+                if (args.length !== 0) runtimeError('string.len() takes no arguments');
+                return str.length;
+            case 'is_empty':
+                if (args.length !== 0) runtimeError('string.is_empty() takes no arguments');
+                return str.length === 0;
+            case 'upper':
+                if (args.length !== 0) runtimeError('string.upper() takes no arguments');
+                return str.toUpperCase();
+            case 'lower':
+                if (args.length !== 0) runtimeError('string.lower() takes no arguments');
+                return str.toLowerCase();
+            case 'trim':
+                if (args.length !== 0) runtimeError('string.trim() takes no arguments');
+                return str.trim();
+            case 'contains':
+                if (args.length !== 1) runtimeError('string.contains(substr) expects exactly 1 argument');
+                return str.includes(auraToString(args[0]));
+            case 'starts_with':
+                if (args.length !== 1) runtimeError('string.starts_with(prefix) expects exactly 1 argument');
+                return str.startsWith(auraToString(args[0]));
+            case 'ends_with':
+                if (args.length !== 1) runtimeError('string.ends_with(suffix) expects exactly 1 argument');
+                return str.endsWith(auraToString(args[0]));
+            case 'split': {
+                if (args.length < 1 || args.length > 2) runtimeError('string.split(sep, limit?) expects 1 or 2 arguments');
+                const sep = auraToString(args[0]);
+                const limit = args.length === 2 ? Math.max(0, Math.trunc(this.asNumber(args[1], 'string.split'))) : undefined;
+                const items = limit === undefined ? str.split(sep) : str.split(sep, limit);
+                return { type: 'list', items } as AuraList;
+            }
+            case 'index_of':
+                if (args.length !== 1) runtimeError('string.index_of(substr) expects exactly 1 argument');
+                return str.indexOf(auraToString(args[0]));
+            case 'last_index_of':
+                if (args.length !== 1) runtimeError('string.last_index_of(substr) expects exactly 1 argument');
+                return str.lastIndexOf(auraToString(args[0]));
+            case 'repeat': {
+                if (args.length !== 1) runtimeError('string.repeat(n) expects exactly 1 argument');
+                const count = Math.trunc(this.asNumber(args[0], 'string.repeat'));
+                if (count < 0) runtimeError('string.repeat(n) requires n >= 0');
+                return str.repeat(count);
+            }
+            case 'slice': {
+                if (args.length < 1 || args.length > 2) runtimeError('string.slice(start, end?) expects 1 or 2 arguments');
+                const start = Math.trunc(this.asNumber(args[0], 'string.slice'));
+                if (args.length === 1) return str.slice(start);
+                const end = Math.trunc(this.asNumber(args[1], 'string.slice'));
+                return str.slice(start, end);
+            }
+            case 'char_at': {
+                if (args.length !== 1) runtimeError('string.char_at(index) expects exactly 1 argument');
+                const idx = Math.trunc(this.asNumber(args[0], 'string.char_at'));
+                const realIdx = idx < 0 ? str.length + idx : idx;
+                if (realIdx < 0 || realIdx >= str.length) return null;
+                return str[realIdx];
+            }
+            default:
+                return undefined;
+        }
+    }
+
+    private fastCallListMethod(list: AuraList, method: string, args: Value[]): Value | undefined {
+        switch (method) {
+            case 'len':
+                if (args.length !== 0) runtimeError('list.len() takes no arguments');
+                return list.items.length;
+            case 'is_empty':
+                if (args.length !== 0) runtimeError('list.is_empty() takes no arguments');
+                return list.items.length === 0;
+            case 'first':
+                if (args.length !== 0) runtimeError('list.first() takes no arguments');
+                return list.items.length > 0 ? list.items[0] : null;
+            case 'last':
+                if (args.length !== 0) runtimeError('list.last() takes no arguments');
+                return list.items.length > 0 ? list.items[list.items.length - 1] : null;
+            case 'pop':
+                if (args.length !== 0) runtimeError('list.pop() takes no arguments');
+                return list.items.pop() ?? null;
+            case 'clear':
+                if (args.length !== 0) runtimeError('list.clear() takes no arguments');
+                list.items.length = 0;
+                return null;
+            case 'to_list':
+                if (args.length !== 0) runtimeError('list.to_list() takes no arguments');
+                return { type: 'list', items: [...list.items] } as AuraList;
+            case 'append':
+            case 'push':
+                if (args.length !== 1) runtimeError('list.push(value) expects exactly 1 argument');
+                list.items.push(args[0]);
+                return null;
+            default:
+                return undefined;
+        }
     }
 
     private getAttr(obj: Value, attr: string): Value {
@@ -845,7 +996,8 @@ export class VM {
                         : native.kind === 'heap' ? 'Binary heap with O(log n) push/pop'
                             : native.kind === 'hashmap' ? 'Hash map with average O(1) operations'
                                 : native.kind === 'tree' ? 'Tree map with sorted key traversal'
-                                    : 'Indexed collection with automatic key lookup';
+                                    : native.kind === 'tensor' ? 'Dense numeric tensor with vectorized arithmetic'
+                                        : 'Indexed collection with automatic key lookup';
             return this.builtin(`${native.kind}.explain_plan`, () => summary);
         }
         if (native.kind === 'stack') return this.getStackAttr(native, attr);
@@ -855,6 +1007,7 @@ export class VM {
         if (native.kind === 'tree') return this.getMapNativeAttr(native, attr, true);
         if (native.kind === 'heap') return this.getHeapAttr(native, attr);
         if (native.kind === 'indexed') return this.getIndexedAttr(native, attr);
+        if (native.kind === 'tensor') return this.getTensorAttr(native, attr);
         runtimeError(`Unknown native kind '${native.kind}'`);
     }
 
@@ -1055,6 +1208,548 @@ export class VM {
         return (value as any)?.type === 'builtin' ? value : this.builtin(`indexed.${attr}`, () => value);
     }
 
+    private getTensorAttr(native: AuraNative, attr: string): Value {
+        const data = this.expectTensor(native);
+        const methods: Record<string, () => Value> = {
+            len: () => data.values.length,
+            rank: () => data.shape.length,
+            shape: () => ({ type: 'list', items: [...data.shape] } as AuraList),
+            to_list: () => this.tensorToNested(data.shape, data.values),
+            to_flat_list: () => ({ type: 'list', items: data.values.map((v) => v as Value) } as AuraList),
+            clone: () => ({ type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: [...data.values] } as NativeTensorData } as AuraNative),
+            sum: () => data.values.reduce((acc, cur) => acc + cur, 0),
+            mean: () => data.values.length === 0 ? 0 : data.values.reduce((acc, cur) => acc + cur, 0) / data.values.length,
+            min: () => {
+                if (data.values.length === 0) runtimeError('tensor.min requires non-empty tensor');
+                let out = data.values[0];
+                for (let i = 1; i < data.values.length; i++) if (data.values[i] < out) out = data.values[i];
+                return out;
+            },
+            max: () => {
+                if (data.values.length === 0) runtimeError('tensor.max requires non-empty tensor');
+                let out = data.values[0];
+                for (let i = 1; i < data.values.length; i++) if (data.values[i] > out) out = data.values[i];
+                return out;
+            },
+            argmin: () => {
+                if (data.values.length === 0) runtimeError('tensor.argmin requires non-empty tensor');
+                let best = 0;
+                for (let i = 1; i < data.values.length; i++) if (data.values[i] < data.values[best]) best = i;
+                return best;
+            },
+            argmax: () => {
+                if (data.values.length === 0) runtimeError('tensor.argmax requires non-empty tensor');
+                let best = 0;
+                for (let i = 1; i < data.values.length; i++) if (data.values[i] > data.values[best]) best = i;
+                return best;
+            },
+            variance: () => this.builtin('tensor.variance', ([sample]: Value[]) => {
+                if (data.values.length === 0) runtimeError('tensor.variance requires non-empty tensor');
+                const sampleMode = sample === true;
+                if (sampleMode && data.values.length < 2) runtimeError('tensor.variance(sample=true) requires at least 2 values');
+                const mean = data.values.reduce((acc, cur) => acc + cur, 0) / data.values.length;
+                let acc = 0;
+                for (const v of data.values) {
+                    const d = v - mean;
+                    acc += d * d;
+                }
+                const denom = sampleMode ? data.values.length - 1 : data.values.length;
+                return acc / denom;
+            }),
+            std: () => this.builtin('tensor.std', ([sample]: Value[]) => {
+                const variance = (methods.variance() as BuiltinFn).fn([sample]);
+                return Math.sqrt(this.asNumber(variance, 'tensor.std'));
+            }),
+            flatten: () => ({ type: 'native', kind: 'tensor', data: { shape: [data.values.length], values: [...data.values] } as NativeTensorData } as AuraNative),
+            reshape: () => this.builtin('tensor.reshape', (args: Value[]) => {
+                const dimsRaw = args.length === 1 && (args[0] as any)?.type === 'list'
+                    ? (args[0] as AuraList).items
+                    : args;
+                if (dimsRaw.length === 0) runtimeError('tensor.reshape(shape) expects at least one dimension');
+                const dims: number[] = [];
+                for (const raw of dimsRaw) {
+                    const dim = this.asNumber(raw, 'tensor.reshape');
+                    const n = Math.trunc(dim);
+                    if (n < 0 || n !== dim) runtimeError('tensor.reshape dimensions must be non-negative integers');
+                    dims.push(n);
+                }
+                if (this.tensorSize(dims) !== data.values.length) runtimeError('tensor.reshape size mismatch');
+                return { type: 'native', kind: 'tensor', data: { shape: dims, values: [...data.values] } as NativeTensorData } as AuraNative;
+            }),
+            transpose: () => {
+                if (data.shape.length !== 2) runtimeError('tensor.transpose() currently supports rank-2 tensors');
+                const rows = data.shape[0];
+                const cols = data.shape[1];
+                const out = new Array<number>(rows * cols);
+                for (let r = 0; r < rows; r++) {
+                    for (let c = 0; c < cols; c++) {
+                        out[c * rows + r] = data.values[r * cols + c];
+                    }
+                }
+                return { type: 'native', kind: 'tensor', data: { shape: [cols, rows], values: out } as NativeTensorData } as AuraNative;
+            },
+            sum_axis: () => this.builtin('tensor.sum_axis', ([axis]: Value[]) => this.tensorReduceAxis(data, axis, 'sum')),
+            mean_axis: () => this.builtin('tensor.mean_axis', ([axis]: Value[]) => this.tensorReduceAxis(data, axis, 'mean')),
+            get: () => this.builtin('tensor.get', ([idx]: Value[]) => {
+                const at = this.tensorLinearIndex(data.values.length, idx, 'tensor.get');
+                return data.values[at];
+            }),
+            set: () => this.builtin('tensor.set', ([idx, value]: Value[]) => {
+                const at = this.tensorLinearIndex(data.values.length, idx, 'tensor.set');
+                data.values[at] = this.asNumber(value, 'tensor.set');
+                return native;
+            }),
+            at: () => this.builtin('tensor.at', (args: Value[]) => {
+                const at = this.tensorOffset(data.shape, args);
+                return data.values[at];
+            }),
+            set_at: () => this.builtin('tensor.set_at', (args: Value[]) => {
+                if (args.length < 2) runtimeError('tensor.set_at(i..., value) expects indices and value');
+                const value = this.asNumber(args[args.length - 1], 'tensor.set_at');
+                const at = this.tensorOffset(data.shape, args.slice(0, args.length - 1));
+                data.values[at] = value;
+                return native;
+            }),
+            fill_: () => this.builtin('tensor.fill_', ([value]: Value[]) => {
+                const fill = this.asNumber(value, 'tensor.fill_');
+                for (let i = 0; i < data.values.length; i++) data.values[i] = fill;
+                return native;
+            }),
+            map: () => this.builtin('tensor.map', ([fn]: Value[]) => {
+                const out = new Array<number>(data.values.length);
+                for (let i = 0; i < data.values.length; i++) {
+                    out[i] = this.asNumber(this.invokeCallable(fn, [data.values[i], i]), 'tensor.map');
+                }
+                return { type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: out } as NativeTensorData } as AuraNative;
+            }),
+            zip_map: () => this.builtin('tensor.zip_map', ([other, fn]: Value[]) => {
+                const rhs = this.tensorFromValue(other, 'tensor.zip_map');
+                if (!this.tensorSameShape(data.shape, rhs.shape)) runtimeError('tensor.zip_map expects tensors with same shape');
+                const out = new Array<number>(data.values.length);
+                for (let i = 0; i < data.values.length; i++) {
+                    out[i] = this.asNumber(this.invokeCallable(fn, [data.values[i], rhs.values[i], i]), 'tensor.zip_map');
+                }
+                return { type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: out } as NativeTensorData } as AuraNative;
+            }),
+            add: () => this.builtin('tensor.add', ([rhs]: Value[]) => this.tensorBinaryOp(data, rhs, 'add', (a, b) => a + b)),
+            sub: () => this.builtin('tensor.sub', ([rhs]: Value[]) => this.tensorBinaryOp(data, rhs, 'sub', (a, b) => a - b)),
+            mul: () => this.builtin('tensor.mul', ([rhs]: Value[]) => this.tensorBinaryOp(data, rhs, 'mul', (a, b) => a * b)),
+            div: () => this.builtin('tensor.div', ([rhs]: Value[]) => this.tensorBinaryOp(data, rhs, 'div', (a, b) => {
+                if (b === 0) runtimeError('tensor.div division by zero');
+                return a / b;
+            })),
+            add_: () => this.builtin('tensor.add_', ([rhs]: Value[]) => this.tensorBinaryOpInPlace(native, data, rhs, 'add', (a, b) => a + b)),
+            sub_: () => this.builtin('tensor.sub_', ([rhs]: Value[]) => this.tensorBinaryOpInPlace(native, data, rhs, 'sub', (a, b) => a - b)),
+            mul_: () => this.builtin('tensor.mul_', ([rhs]: Value[]) => this.tensorBinaryOpInPlace(native, data, rhs, 'mul', (a, b) => a * b)),
+            div_: () => this.builtin('tensor.div_', ([rhs]: Value[]) => this.tensorBinaryOpInPlace(native, data, rhs, 'div', (a, b) => {
+                if (b === 0) runtimeError('tensor.div_ division by zero');
+                return a / b;
+            })),
+            exp: () => ({ type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: data.values.map((v) => Math.exp(v)) } as NativeTensorData } as AuraNative),
+            log: () => ({ type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: data.values.map((v) => {
+                if (v <= 0) runtimeError('tensor.log expects values > 0');
+                return Math.log(v);
+            }) } as NativeTensorData } as AuraNative),
+            sigmoid: () => ({ type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: data.values.map((v) => 1 / (1 + Math.exp(-v))) } as NativeTensorData } as AuraNative),
+            relu: () => ({ type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: data.values.map((v) => Math.max(0, v)) } as NativeTensorData } as AuraNative),
+            tanh: () => ({ type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: data.values.map((v) => Math.tanh(v)) } as NativeTensorData } as AuraNative),
+            abs: () => ({ type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: data.values.map((v) => Math.abs(v)) } as NativeTensorData } as AuraNative),
+            sqrt: () => ({ type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: data.values.map((v) => {
+                if (v < 0) runtimeError('tensor.sqrt expects values >= 0');
+                return Math.sqrt(v);
+            }) } as NativeTensorData } as AuraNative),
+            pow: () => this.builtin('tensor.pow', ([rhs]: Value[]) => this.tensorBinaryOp(data, rhs, 'pow', (a, b) => Math.pow(a, b))),
+            clip: () => this.builtin('tensor.clip', ([minVal, maxVal]: Value[]) => {
+                const lo = this.asNumber(minVal, 'tensor.clip min');
+                const hi = this.asNumber(maxVal, 'tensor.clip max');
+                if (hi < lo) runtimeError('tensor.clip expects max >= min');
+                return {
+                    type: 'native',
+                    kind: 'tensor',
+                    data: { shape: [...data.shape], values: data.values.map((v) => Math.min(hi, Math.max(lo, v))) } as NativeTensorData,
+                } as AuraNative;
+            }),
+            l2_norm: () => Math.sqrt(data.values.reduce((acc, cur) => acc + cur * cur, 0)),
+            normalize: () => this.builtin('tensor.normalize', ([epsVal]: Value[]) => {
+                const eps = epsVal === undefined ? 1e-12 : this.asNumber(epsVal, 'tensor.normalize eps');
+                const norm = Math.sqrt(data.values.reduce((acc, cur) => acc + cur * cur, 0));
+                const denom = norm + eps;
+                return {
+                    type: 'native',
+                    kind: 'tensor',
+                    data: { shape: [...data.shape], values: data.values.map((v) => v / denom) } as NativeTensorData,
+                } as AuraNative;
+            }),
+            softmax: () => this.builtin('tensor.softmax', ([axis]: Value[]) => this.tensorSoftmax(data, axis, false)),
+            log_softmax: () => this.builtin('tensor.log_softmax', ([axis]: Value[]) => this.tensorSoftmax(data, axis, true)),
+            dot: () => this.builtin('tensor.dot', ([other]: Value[]) => {
+                const rhs = this.tensorFromValue(other, 'tensor.dot');
+                if (data.shape.length !== 1 || rhs.shape.length !== 1) runtimeError('tensor.dot expects rank-1 tensors');
+                if (data.values.length !== rhs.values.length) runtimeError('tensor.dot expects vectors with same length');
+                let out = 0;
+                for (let i = 0; i < data.values.length; i++) out += data.values[i] * rhs.values[i];
+                return out;
+            }),
+            matmul: () => this.builtin('tensor.matmul', ([other]: Value[]) => {
+                const rhs = this.tensorFromValue(other, 'tensor.matmul');
+                return this.tensorMatmul(data, rhs);
+            }),
+            mse_loss: () => this.builtin('tensor.mse_loss', ([target]: Value[]) => {
+                const rhs = this.tensorFromValue(target, 'tensor.mse_loss');
+                if (!this.tensorSameShape(data.shape, rhs.shape)) runtimeError('tensor.mse_loss expects tensors with same shape');
+                if (data.values.length === 0) return 0;
+                let acc = 0;
+                for (let i = 0; i < data.values.length; i++) {
+                    const d = data.values[i] - rhs.values[i];
+                    acc += d * d;
+                }
+                return acc / data.values.length;
+            }),
+            bce_loss: () => this.builtin('tensor.bce_loss', ([target, epsVal]: Value[]) => {
+                const rhs = this.tensorFromValue(target, 'tensor.bce_loss');
+                if (!this.tensorSameShape(data.shape, rhs.shape)) runtimeError('tensor.bce_loss expects tensors with same shape');
+                if (data.values.length === 0) return 0;
+                const eps = epsVal === undefined ? 1e-12 : this.asNumber(epsVal, 'tensor.bce_loss eps');
+                let acc = 0;
+                for (let i = 0; i < data.values.length; i++) {
+                    const p = Math.min(1 - eps, Math.max(eps, data.values[i]));
+                    const y = rhs.values[i];
+                    acc += -(y * Math.log(p) + (1 - y) * Math.log(1 - p));
+                }
+                return acc / data.values.length;
+            }),
+        };
+
+        if (!(attr in methods)) runtimeError('Tensor has no attribute ' + "'" + attr + "'");
+        const value = methods[attr]();
+        return (value as any)?.type === 'builtin' ? value : this.builtin('tensor.' + attr, () => value);
+    }
+
+    private tensorSize(shape: number[]): number {
+        let size = 1;
+        for (const dim of shape) size *= dim;
+        return size;
+    }
+
+    private tensorSameShape(a: number[], b: number[]): boolean {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+    }
+
+    private tensorLinearIndex(length: number, idx: Value, label: string): number {
+        if (typeof idx !== 'number') runtimeError(label + ' expects numeric index');
+        const raw = Math.trunc(idx);
+        const resolved = raw < 0 ? length + raw : raw;
+        if (resolved < 0 || resolved >= length) runtimeError(label + ' index out of bounds');
+        return resolved;
+    }
+
+    private tensorOffset(shape: number[], indices: Value[]): number {
+        if (shape.length !== indices.length) runtimeError('tensor index rank mismatch');
+        let offset = 0;
+        for (let i = 0; i < shape.length; i++) {
+            const dim = shape[i];
+            const idx = this.tensorLinearIndex(dim, indices[i], 'tensor index');
+            offset = offset * dim + idx;
+        }
+        return offset;
+    }
+
+    private tensorToNested(shape: number[], values: number[]): Value {
+        if (shape.length === 0) return values[0] ?? 0;
+        if (shape.length === 1) return { type: 'list', items: values.map((v) => v as Value) } as AuraList;
+        const step = this.tensorSize(shape.slice(1));
+        const out: Value[] = [];
+        for (let i = 0; i < shape[0]; i++) {
+            const start = i * step;
+            out.push(this.tensorToNested(shape.slice(1), values.slice(start, start + step)));
+        }
+        return { type: 'list', items: out } as AuraList;
+    }
+
+    private tensorFromValue(value: Value, context: string): NativeTensorData {
+        if ((value as any)?.type === 'native' && (value as AuraNative).kind === 'tensor') {
+            return this.expectTensor(value as AuraNative);
+        }
+        runtimeError(context + ' expects a Tensor');
+    }
+
+    private tensorStrides(shape: number[]): number[] {
+        const strides = new Array<number>(shape.length);
+        let stride = 1;
+        for (let i = shape.length - 1; i >= 0; i--) {
+            strides[i] = stride;
+            stride *= shape[i];
+        }
+        return strides;
+    }
+
+    private tensorBroadcastShape(a: number[], b: number[]): number[] | undefined {
+        const n = Math.max(a.length, b.length);
+        const out = new Array<number>(n);
+        for (let i = 0; i < n; i++) {
+            const da = a[a.length - 1 - i] ?? 1;
+            const db = b[b.length - 1 - i] ?? 1;
+            if (da !== db && da !== 1 && db !== 1) return undefined;
+            out[n - 1 - i] = Math.max(da, db);
+        }
+        return out;
+    }
+
+    private tensorBroadcastBinary(
+        lhs: NativeTensorData,
+        rhs: NativeTensorData,
+        op: (a: number, b: number) => number,
+    ): AuraNative | undefined {
+        const outShape = this.tensorBroadcastShape(lhs.shape, rhs.shape);
+        if (!outShape) return undefined;
+
+        const outSize = this.tensorSize(outShape);
+        const outValues = new Array<number>(outSize);
+        const outStrides = this.tensorStrides(outShape);
+        const lhsStrides = this.tensorStrides(lhs.shape);
+        const rhsStrides = this.tensorStrides(rhs.shape);
+
+        for (let idx = 0; idx < outSize; idx++) {
+            let rem = idx;
+            let lhsOffset = 0;
+            let rhsOffset = 0;
+            for (let d = 0; d < outShape.length; d++) {
+                const coord = outStrides[d] === 0 ? 0 : Math.floor(rem / outStrides[d]);
+                rem = outStrides[d] === 0 ? 0 : rem % outStrides[d];
+
+                const lhsD = d - (outShape.length - lhs.shape.length);
+                if (lhsD >= 0) {
+                    const lhsDim = lhs.shape[lhsD];
+                    const lhsCoord = lhsDim === 1 ? 0 : coord;
+                    lhsOffset += lhsCoord * lhsStrides[lhsD];
+                }
+
+                const rhsD = d - (outShape.length - rhs.shape.length);
+                if (rhsD >= 0) {
+                    const rhsDim = rhs.shape[rhsD];
+                    const rhsCoord = rhsDim === 1 ? 0 : coord;
+                    rhsOffset += rhsCoord * rhsStrides[rhsD];
+                }
+            }
+            outValues[idx] = op(lhs.values[lhsOffset], rhs.values[rhsOffset]);
+        }
+
+        return { type: 'native', kind: 'tensor', data: { shape: outShape, values: outValues } as NativeTensorData } as AuraNative;
+    }
+
+    private tensorBinaryOp(
+        lhs: NativeTensorData,
+        rhsValue: Value,
+        context: string,
+        op: (a: number, b: number) => number,
+    ): AuraNative {
+        if (typeof rhsValue === 'number') {
+            return {
+                type: 'native',
+                kind: 'tensor',
+                data: { shape: [...lhs.shape], values: lhs.values.map((v) => op(v, rhsValue)) } as NativeTensorData,
+            } as AuraNative;
+        }
+
+        const rhs = this.tensorFromValue(rhsValue, 'tensor.' + context);
+        const broadcasted = this.tensorBroadcastBinary(lhs, rhs, op);
+        if (broadcasted) return broadcasted;
+
+        runtimeError('tensor.' + context + ' expects tensors with broadcast-compatible shapes');
+    }
+
+    private tensorBinaryOpInPlace(
+        targetNative: AuraNative,
+        target: NativeTensorData,
+        rhsValue: Value,
+        context: string,
+        op: (a: number, b: number) => number,
+    ): AuraNative {
+        const out = this.tensorBinaryOp(target, rhsValue, context, op);
+        const outData = this.expectTensor(out);
+        if (!this.tensorSameShape(outData.shape, target.shape)) {
+            runtimeError('tensor.' + context + '_ requires result shape to match target tensor shape');
+        }
+        target.values = [...outData.values];
+        return targetNative;
+    }
+
+    private tensorReduceAxis(data: NativeTensorData, axisValue: Value, kind: 'sum' | 'mean'): Value {
+        if (data.shape.length === 1) {
+            if (axisValue !== undefined && axisValue !== null) {
+                const axis = Math.trunc(this.asNumber(axisValue, 'tensor.' + kind + '_axis'));
+                if (axis !== 0 && axis !== -1) runtimeError('tensor.' + kind + '_axis axis must be 0 or -1 for rank-1 tensor');
+            }
+            const total = data.values.reduce((acc, cur) => acc + cur, 0);
+            return kind === 'sum' ? total : (data.values.length === 0 ? 0 : total / data.values.length);
+        }
+
+        if (data.shape.length !== 2) runtimeError('tensor.' + kind + '_axis currently supports rank-1 and rank-2 tensors');
+
+        const rows = data.shape[0];
+        const cols = data.shape[1];
+        const axis = axisValue === undefined || axisValue === null
+            ? -1
+            : Math.trunc(this.asNumber(axisValue, 'tensor.' + kind + '_axis'));
+
+        if (axis === -1 || axis === 1) {
+            const out = new Array<number>(rows).fill(0);
+            for (let r = 0; r < rows; r++) {
+                let acc = 0;
+                for (let c = 0; c < cols; c++) acc += data.values[r * cols + c];
+                out[r] = kind === 'mean' ? (cols === 0 ? 0 : acc / cols) : acc;
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [rows], values: out } as NativeTensorData } as AuraNative;
+        }
+
+        if (axis === 0) {
+            const out = new Array<number>(cols).fill(0);
+            for (let c = 0; c < cols; c++) {
+                let acc = 0;
+                for (let r = 0; r < rows; r++) acc += data.values[r * cols + c];
+                out[c] = kind === 'mean' ? (rows === 0 ? 0 : acc / rows) : acc;
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [cols], values: out } as NativeTensorData } as AuraNative;
+        }
+
+        runtimeError('tensor.' + kind + '_axis axis must be 0, 1, or -1');
+    }
+
+    private tensorSoftmax(data: NativeTensorData, axisValue: Value, logOutput: boolean): AuraNative {
+        if (data.shape.length === 1) {
+            const maxVal = data.values.length === 0 ? 0 : Math.max(...data.values);
+            const exps = data.values.map((v) => Math.exp(v - maxVal));
+            const sum = exps.reduce((acc, cur) => acc + cur, 0);
+            const vals = exps.map((v) => {
+                const p = sum === 0 ? 0 : v / sum;
+                return logOutput ? Math.log(Math.max(1e-12, p)) : p;
+            });
+            return { type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: vals } as NativeTensorData } as AuraNative;
+        }
+
+        if (data.shape.length !== 2) runtimeError('tensor.softmax/log_softmax currently supports rank-1 and rank-2 tensors');
+
+        const rows = data.shape[0];
+        const cols = data.shape[1];
+        const axis = axisValue === undefined || axisValue === null
+            ? -1
+            : Math.trunc(this.asNumber(axisValue, 'tensor.softmax axis'));
+        const out = new Array<number>(data.values.length).fill(0);
+
+        if (axis === -1 || axis === 1) {
+            for (let r = 0; r < rows; r++) {
+                let maxVal = -Infinity;
+                for (let c = 0; c < cols; c++) {
+                    const v = data.values[r * cols + c];
+                    if (v > maxVal) maxVal = v;
+                }
+                let sum = 0;
+                for (let c = 0; c < cols; c++) {
+                    const e = Math.exp(data.values[r * cols + c] - maxVal);
+                    out[r * cols + c] = e;
+                    sum += e;
+                }
+                for (let c = 0; c < cols; c++) {
+                    const p = sum === 0 ? 0 : out[r * cols + c] / sum;
+                    out[r * cols + c] = logOutput ? Math.log(Math.max(1e-12, p)) : p;
+                }
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: out } as NativeTensorData } as AuraNative;
+        }
+
+        if (axis === 0) {
+            for (let c = 0; c < cols; c++) {
+                let maxVal = -Infinity;
+                for (let r = 0; r < rows; r++) {
+                    const v = data.values[r * cols + c];
+                    if (v > maxVal) maxVal = v;
+                }
+                let sum = 0;
+                for (let r = 0; r < rows; r++) {
+                    const e = Math.exp(data.values[r * cols + c] - maxVal);
+                    out[r * cols + c] = e;
+                    sum += e;
+                }
+                for (let r = 0; r < rows; r++) {
+                    const p = sum === 0 ? 0 : out[r * cols + c] / sum;
+                    out[r * cols + c] = logOutput ? Math.log(Math.max(1e-12, p)) : p;
+                }
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: out } as NativeTensorData } as AuraNative;
+        }
+
+        runtimeError('tensor.softmax/log_softmax axis must be 0, 1, or -1');
+    }
+
+    private tensorMatmul(lhs: NativeTensorData, rhs: NativeTensorData): Value {
+        if (lhs.shape.length === 1 && rhs.shape.length === 1) {
+            if (lhs.values.length !== rhs.values.length) runtimeError('tensor.matmul vector length mismatch');
+            let sum = 0;
+            for (let i = 0; i < lhs.values.length; i++) sum += lhs.values[i] * rhs.values[i];
+            return sum;
+        }
+
+        if (lhs.shape.length === 1 && rhs.shape.length === 2) {
+            const n = lhs.shape[0];
+            const rhsRows = rhs.shape[0];
+            const p = rhs.shape[1];
+            if (n !== rhsRows) runtimeError('tensor.matmul dimension mismatch');
+            const out = new Array<number>(p).fill(0);
+            for (let c = 0; c < p; c++) {
+                let sum = 0;
+                for (let k = 0; k < n; k++) sum += lhs.values[k] * rhs.values[k * p + c];
+                out[c] = sum;
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [p], values: out } as NativeTensorData } as AuraNative;
+        }
+
+        if (lhs.shape.length === 2 && rhs.shape.length === 1) {
+            const m = lhs.shape[0];
+            const n = lhs.shape[1];
+            const rhsLen = rhs.shape[0];
+            if (n !== rhsLen) runtimeError('tensor.matmul dimension mismatch');
+            const out = new Array<number>(m).fill(0);
+            for (let r = 0; r < m; r++) {
+                let sum = 0;
+                for (let k = 0; k < n; k++) sum += lhs.values[r * n + k] * rhs.values[k];
+                out[r] = sum;
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [m], values: out } as NativeTensorData } as AuraNative;
+        }
+
+        if (lhs.shape.length === 2 && rhs.shape.length === 2) {
+            const m = lhs.shape[0];
+            const n = lhs.shape[1];
+            const rhsRows = rhs.shape[0];
+            const p = rhs.shape[1];
+            if (n !== rhsRows) runtimeError('tensor.matmul dimension mismatch');
+            const out = new Array<number>(m * p).fill(0);
+            for (let r = 0; r < m; r++) {
+                for (let c = 0; c < p; c++) {
+                    let sum = 0;
+                    for (let k = 0; k < n; k++) {
+                        sum += lhs.values[r * n + k] * rhs.values[k * p + c];
+                    }
+                    out[r * p + c] = sum;
+                }
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [m, p], values: out } as NativeTensorData } as AuraNative;
+        }
+
+        runtimeError('tensor.matmul currently supports rank-1/rank-2 combinations only');
+    }
+
+    private expectTensor(native: AuraNative): NativeTensorData {
+        const data = native.data as NativeTensorData;
+        if (!data || !Array.isArray(data.shape) || !Array.isArray(data.values)) runtimeError('Tensor storage is invalid');
+        if (!data.shape.every((dim) => Number.isInteger(dim) && dim >= 0)) runtimeError('Tensor shape must be non-negative integers');
+        if (!data.values.every((v) => typeof v === 'number')) runtimeError('Tensor values must be numeric');
+        if (this.tensorSize(data.shape) !== data.values.length) runtimeError('Tensor shape/value length mismatch');
+        return data;
+    }
+
     private expectNativeArray(native: AuraNative, label: string): Value[] {
         if (!Array.isArray(native.data)) runtimeError(`${label} storage is invalid`);
         return native.data;
@@ -1217,6 +1912,10 @@ export class VM {
                 const heap = this.expectHeap(native);
                 return { type: 'native', kind: 'heap', data: { items: heap.items.map((item) => this.cloneValue(item)), mode: heap.mode } };
             }
+            if (native.kind === 'tensor') {
+                const tensor = this.expectTensor(native);
+                return { type: 'native', kind: 'tensor', data: { shape: [...tensor.shape], values: [...tensor.values] } };
+            }
             const items = this.expectNativeArray(native, 'clone').map((item) => this.cloneValue(item));
             return { type: 'native', kind: native.kind, data: items };
         }
@@ -1375,11 +2074,13 @@ export class VM {
         receiver?: AuraInstance,
         constructing?: AuraInstance,
         moduleScope?: Map<string, Value>,
+        localSlots?: Value[],
     ): void {
         this.frames.push({
             chunk,
             ip: 0,
             locals,
+            localSlots,
             receiver,
             constructing,
             fnName: chunk.name,

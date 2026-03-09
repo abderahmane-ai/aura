@@ -26,12 +26,12 @@ Aura is an audited, experimental programming language built as a creative R&D pr
 - `indexed`: in-memory collection with automatic key indexes.
 - `math` module: complete classical math + practical helpers + twists (`math.balance`, `math.exact`, `math.scale`).
 - Native collections: `Stack`, `Queue`, `LinkedList`, `HashMap`, `TreeMap`, `Heap`.
-- Practical stdlib MVP modules: `std.io`, `std.fs`, `std.json`, `std.time`, `std.collections`.
+- Practical stdlib MVP modules: `std.io`, `std.fs`, `std.json`, `std.time`, `std.collections`, `std.test`, `std.schema`.
 
 ## Repository Layout
 
 - `compiler/`: lexer, parser, resolver, compiler, VM, CLI (`aura`, `aurac`)
-- `stdlib/`: standard Aura modules (for now: `std.math`)
+- `stdlib/`: standard Aura modules (`std.math`, `std.io`, `std.fs`, `std.json`, `std.time`, `std.collections`, `std.test`, `std.schema`)
 - `editor/vscode/`: syntax highlighting, snippets, icon theme, non-LSP IntelliSense
 - `examples/`: language demos by topic
 - `docs/`: install, syntax, tooling, architecture notes
@@ -103,6 +103,7 @@ fn main():
 ```powershell
 cd .\compiler
 npm run check:strict
+npm run test
 ```
 
 ## Contributing
@@ -112,3 +113,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 ## License
 
 MIT. See [LICENSE](./LICENSE).
+

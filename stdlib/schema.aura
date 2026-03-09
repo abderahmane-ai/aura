@@ -1,0 +1,400 @@
+module std.schema
+
+import std.json as json
+
+fn any():
+    return {"kind": "any"}
+
+fn string(trim: Bool = false, min_len: Int = 0, max_len: Int = -1):
+    return {"kind": "string", "trim": trim, "min_len": min_len, "max_len": max_len}
+
+fn int(min = nil, max = nil):
+    return {"kind": "int", "min": min, "max": max}
+
+fn float(min = nil, max = nil):
+    return {"kind": "float", "min": min, "max": max}
+
+fn bool():
+    return {"kind": "bool"}
+
+fn literal(value):
+    return {"kind": "literal", "value": value}
+
+fn one_of(values):
+    return {"kind": "one_of", "values": to_list(values)}
+
+fn list(item_schema, min_len: Int = 0, max_len: Int = -1):
+    return {"kind": "list", "item": item_schema, "min_len": min_len, "max_len": max_len}
+
+fn optional(schema):
+    return {"kind": "optional", "inner": schema}
+
+fn union(options):
+    return {"kind": "union", "options": to_list(options)}
+
+fn refine(schema, predicate, message: String = "refinement failed"):
+    return {"kind": "refine", "inner": schema, "predicate": predicate, "message": message}
+
+fn req(schema):
+    return {"spec": schema, "required": true, "has_default": false, "default": nil}
+
+fn opt(schema):
+    return {"spec": schema, "required": false, "has_default": false, "default": nil}
+
+fn defaulted(schema, default_value):
+    return {"spec": schema, "required": false, "has_default": true, "default": default_value}
+
+fn field(schema, required: Bool = true, has_default: Bool = false, default_value = nil):
+    return {"spec": schema, "required": required, "has_default": has_default, "default": default_value}
+
+fn object(fields, allow_extra: Bool = false):
+    return {"kind": "object", "fields": fields, "allow_extra": allow_extra}
+
+fn migration(from_version: Int, to_version: Int, run_fn):
+    return {"from": from_version, "to": to_version, "run": run_fn}
+
+fn parse(schema, value):
+    return __parse(schema, value, "$")
+
+fn validate(schema, value):
+    let parsed = parse(schema, value)
+    if parsed.is_ok():
+        return Ok(true)
+    return Err(parsed.unwrap_err())
+
+fn parse_or(schema, value, fallback):
+    let parsed = parse(schema, value)
+    if parsed.is_ok():
+        return parsed.unwrap()
+    return fallback
+
+fn migrate(value, current_version: Int, target_version: Int, migrations):
+    if current_version == target_version:
+        return Ok(value)
+    if current_version > target_version:
+        return Err(__error("$", "migration_direction", "downgrade migrations are not supported", target_version, current_version))
+
+    let steps = to_list(migrations)
+    var current = current_version
+    let out = value
+    var guard = 0
+
+    while current < target_version:
+        let step = __find_migration(steps, current)
+        if step == nil:
+            return Err(__error("$", "migration_missing", "no migration step from version {current} to {target_version}", target_version, current))
+
+        let next = step["to"]
+        if json.type_of(next) != "number" or next % 1 != 0 or next <= current:
+            return Err(__error("$", "migration_invalid", "invalid migration step from version {current}", nil, next))
+
+        out = step["run"](out)
+        current = next
+        guard += 1
+        if guard > 1000:
+            return Err(__error("$", "migration_loop", "migration chain exceeded safety guard"))
+
+    if current != target_version:
+        return Err(__error("$", "migration_incomplete", "migration ended at version {current} but target is {target_version}", target_version, current))
+    return Ok(out)
+
+fn parse_versioned(schemas_by_version, target_version: Int, value, version_field: String = "version", migrations = []):
+    if json.type_of(value) != "object":
+        return Err(__error("$", "expected_object", "expected object input for versioned parsing", "object", json.type_of(value)))
+
+    if not __has_key(value, version_field):
+        return Err(__error("$.{version_field}", "missing_version", "missing version field"))
+
+    let current = value[version_field]
+    if json.type_of(current) != "number" or current % 1 != 0:
+        return Err(__error("$.{version_field}", "invalid_version", "version field must be an integer", "Int", current))
+
+    let source_version = current
+    let source_key = str(source_version)
+    let target_key = str(target_version)
+
+    if not __has_key(schemas_by_version, source_key):
+        return Err(__error("$.{version_field}", "unknown_source_schema", "missing schema for source version {source_version}"))
+    if not __has_key(schemas_by_version, target_key):
+        return Err(__error("$.{version_field}", "unknown_target_schema", "missing schema for target version {target_version}"))
+
+    let source_schema = schemas_by_version[source_key]
+    let source_parsed = parse(source_schema, value)
+    if source_parsed.is_err():
+        return source_parsed
+
+    let migrated = migrate(source_parsed.unwrap(), source_version, target_version, migrations)
+    if migrated.is_err():
+        return migrated
+
+    let target_schema = schemas_by_version[target_key]
+    return parse(target_schema, migrated.unwrap())
+
+fn explain(error) -> String:
+    if error == nil:
+        return "schema validation failed"
+    if json.type_of(error) == "string":
+        return error
+
+    let path = "$"
+    if __has_key(error, "path"):
+        path = str(error["path"])
+
+    let code = "unknown"
+    if __has_key(error, "code"):
+        code = str(error["code"])
+
+    let message = "schema validation failed"
+    if __has_key(error, "message"):
+        message = str(error["message"])
+
+    return "{message} [{code}] at {path}"
+
+fn __parse(schema, value, path: String):
+    if schema == nil:
+        return Ok(value)
+
+    if json.type_of(schema) != "object" or not __has_key(schema, "kind"):
+        return Err(__error(path, "invalid_schema", "schema must be an object with a 'kind' field"))
+
+    let kind = schema["kind"]
+
+    if kind == "any":
+        return Ok(value)
+
+    if kind == "string":
+        return __parse_string(schema, value, path)
+
+    if kind == "int":
+        return __parse_int(schema, value, path)
+
+    if kind == "float":
+        return __parse_float(schema, value, path)
+
+    if kind == "bool":
+        return __parse_bool(value, path)
+
+    if kind == "literal":
+        if value == schema["value"]:
+            return Ok(value)
+        return Err(__error(path, "literal_mismatch", "value does not match literal", schema["value"], value))
+
+    if kind == "one_of":
+        let allowed = to_list(schema["values"])
+        let matched = false
+        for item in allowed:
+            if value == item:
+                matched = true
+        if matched:
+            return Ok(value)
+        return Err(__error(path, "enum_mismatch", "value is not in enum set", allowed, value))
+
+    if kind == "optional":
+        if value == nil:
+            return Ok(nil)
+        return __parse(schema["inner"], value, path)
+
+    if kind == "list":
+        return __parse_list(schema, value, path)
+
+    if kind == "union":
+        return __parse_union(schema, value, path)
+
+    if kind == "object":
+        return __parse_object(schema, value, path)
+
+    if kind == "refine":
+        let parsed = __parse(schema["inner"], value, path)
+        if parsed.is_err():
+            return parsed
+        let out = parsed.unwrap()
+        if schema["predicate"](out):
+            return Ok(out)
+        return Err(__error(path, "refine_failed", schema["message"], nil, out))
+
+    return Err(__error(path, "invalid_schema_kind", "unknown schema kind '{kind}'"))
+
+fn __parse_string(schema, value, path: String):
+    let out = value
+    if json.type_of(out) != "string":
+        if out == nil:
+            return Err(__error(path, "expected_string", "expected string", "String", out))
+        out = str(out)
+
+    if schema["trim"] == true:
+        out = out.trim()
+
+    let min_len = schema["min_len"]
+    let max_len = schema["max_len"]
+
+    if out.len() < min_len:
+        return Err(__error(path, "string_too_short", "string is shorter than minimum length", min_len, out.len()))
+    if max_len >= 0 and out.len() > max_len:
+        return Err(__error(path, "string_too_long", "string exceeds maximum length", max_len, out.len()))
+
+    return Ok(out)
+
+fn __parse_int(schema, value, path: String):
+    if json.type_of(value) != "number":
+        return Err(__error(path, "expected_int", "expected integer number", "Int", value))
+
+    let out = value
+    if out % 1 != 0:
+        return Err(__error(path, "expected_int", "expected integer number", "Int", value))
+
+    if __has_key(schema, "min") and schema["min"] != nil and out < schema["min"]:
+        return Err(__error(path, "int_too_small", "integer is smaller than minimum", schema["min"], out))
+
+    if __has_key(schema, "max") and schema["max"] != nil and out > schema["max"]:
+        return Err(__error(path, "int_too_large", "integer is larger than maximum", schema["max"], out))
+
+    return Ok(out)
+
+fn __parse_float(schema, value, path: String):
+    if json.type_of(value) != "number":
+        return Err(__error(path, "expected_float", "expected numeric value", "Float64", value))
+
+    let out = value
+
+    if __has_key(schema, "min") and schema["min"] != nil and out < schema["min"]:
+        return Err(__error(path, "float_too_small", "number is smaller than minimum", schema["min"], out))
+
+    if __has_key(schema, "max") and schema["max"] != nil and out > schema["max"]:
+        return Err(__error(path, "float_too_large", "number is larger than maximum", schema["max"], out))
+
+    return Ok(out)
+
+fn __parse_bool(value, path: String):
+    if value == true or value == false:
+        return Ok(value)
+
+    if json.type_of(value) == "string":
+        let s = value.trim().lower()
+        if s == "true" or s == "yes" or s == "1":
+            return Ok(true)
+        if s == "false" or s == "no" or s == "0":
+            return Ok(false)
+
+    return Err(__error(path, "expected_bool", "expected boolean", "Bool", value))
+
+fn __parse_list(schema, value, path: String):
+    if json.type_of(value) != "array":
+        return Err(__error(path, "expected_list", "expected list", "List", value))
+
+    let items = to_list(value)
+    let min_len = schema["min_len"]
+    let max_len = schema["max_len"]
+
+    if items.len() < min_len:
+        return Err(__error(path, "list_too_short", "list is shorter than minimum length", min_len, items.len()))
+    if max_len >= 0 and items.len() > max_len:
+        return Err(__error(path, "list_too_long", "list exceeds maximum length", max_len, items.len()))
+
+    let out = []
+    var i = 0
+    while i < items.len():
+        let item_path = "{path}[{i}]"
+        let parsed = __parse(schema["item"], items[i], item_path)
+        if parsed.is_err():
+            return parsed
+        out.push(parsed.unwrap())
+        i += 1
+
+    return Ok(out)
+
+fn __parse_union(schema, value, path: String):
+    let options = to_list(schema["options"])
+    let first_error = nil
+    let success = nil
+
+    for option in options:
+        if success == nil:
+            let parsed = __parse(option, value, path)
+            if parsed.is_ok():
+                success = parsed
+            elif first_error == nil:
+                first_error = parsed.unwrap_err()
+
+    if success != nil:
+        return success
+    if first_error != nil:
+        return Err(first_error)
+    return Err(__error(path, "invalid_union", "union schema has no options"))
+
+fn __parse_object(schema, value, path: String):
+    if json.type_of(value) != "object":
+        return Err(__error(path, "expected_object", "expected object", "Map", value))
+
+    let fields = schema["fields"]
+    let allow_extra = schema["allow_extra"] == true
+    let out = {}
+    let failure = nil
+
+    for name in fields:
+        if failure == nil:
+            let descriptor = __normalize_field(fields[name])
+            let field_path = "{path}.{name}"
+
+            if __has_key(value, name):
+                let parsed = __parse(descriptor["spec"], value[name], field_path)
+                if parsed.is_err():
+                    failure = parsed.unwrap_err()
+                else:
+                    out[name] = parsed.unwrap()
+            else:
+                if descriptor["has_default"] == true:
+                    out[name] = descriptor["default"]
+                elif descriptor["required"] == true:
+                    failure = __error(field_path, "missing_field", "field is required")
+
+    if failure != nil:
+        return Err(failure)
+
+    if allow_extra:
+        for name in value:
+            if not __has_key(out, name):
+                out[name] = value[name]
+    else:
+        for name in value:
+            if failure == nil and not __has_key(fields, name):
+                failure = __error("{path}.{name}", "unexpected_field", "field is not allowed")
+
+    if failure != nil:
+        return Err(failure)
+    return Ok(out)
+
+fn __normalize_field(definition):
+    if json.type_of(definition) == "object" and __has_key(definition, "spec"):
+        let required = true
+        if __has_key(definition, "required"):
+            required = definition["required"] == true
+
+        let has_default = false
+        if __has_key(definition, "has_default"):
+            has_default = definition["has_default"] == true
+
+        let default_value = nil
+        if __has_key(definition, "default"):
+            default_value = definition["default"]
+
+        return {"spec": definition["spec"], "required": required, "has_default": has_default, "default": default_value}
+
+    return req(definition)
+
+fn __find_migration(steps, from_version: Int):
+    let found = nil
+    for step in steps:
+        if found == nil and step["from"] == from_version:
+            found = step
+    return found
+
+fn __has_key(obj, key: String) -> Bool:
+    let found = false
+    for name in obj:
+        if name == key:
+            found = true
+    return found
+
+fn __error(path: String, code: String, message: String, expected = nil, actual = nil):
+    return {"path": path, "code": code, "message": message, "expected": expected, "actual": actual}
+

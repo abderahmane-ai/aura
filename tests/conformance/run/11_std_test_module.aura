@@ -1,0 +1,14 @@
+import std.test as test
+import std.io as io
+
+fn main():
+    test.assert_true(true)
+    test.assert_false(false)
+    test.assert_equal(2 + 2, 4)
+    test.assert_not_equal(4, 5)
+    test.assert_nil(nil)
+    test.assert_not_nil("aura")
+    test.assert_contains(["a", "b", "c"], "b")
+    test.assert_approx(0.1 + 0.2, 0.3, 0.000001)
+    io.println("std.test ok")
+

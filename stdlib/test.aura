@@ -1,0 +1,66 @@
+module std.test
+
+fn fail(message: String = "test failed"):
+    panic("test.fail: {message}")
+
+fn assert_true(value, message: String = ""):
+    if value != true:
+        if message.len() == 0:
+            panic("assert_true failed: expected true, got {value}")
+        panic("assert_true failed: {message} (got {value})")
+
+fn assert_false(value, message: String = ""):
+    if value != false:
+        if message.len() == 0:
+            panic("assert_false failed: expected false, got {value}")
+        panic("assert_false failed: {message} (got {value})")
+
+fn assert_equal(actual, expected, message: String = ""):
+    if actual != expected:
+        if message.len() == 0:
+            panic("assert_equal failed: expected {expected}, got {actual}")
+        panic("assert_equal failed: {message} (expected {expected}, got {actual})")
+
+fn assert_not_equal(actual, expected, message: String = ""):
+    if actual == expected:
+        if message.len() == 0:
+            panic("assert_not_equal failed: both values are {actual}")
+        panic("assert_not_equal failed: {message} (both values are {actual})")
+
+fn assert_nil(value, message: String = ""):
+    if value != nil:
+        if message.len() == 0:
+            panic("assert_nil failed: expected nil, got {value}")
+        panic("assert_nil failed: {message} (got {value})")
+
+fn assert_not_nil(value, message: String = ""):
+    if value == nil:
+        if message.len() == 0:
+            panic("assert_not_nil failed: value is nil")
+        panic("assert_not_nil failed: {message}")
+
+fn assert_contains(haystack, needle, message: String = ""):
+    let found = false
+    for item in to_list(haystack):
+        if item == needle:
+            found = true
+            break
+    if not found:
+        if message.len() == 0:
+            panic("assert_contains failed: {needle} not found")
+        panic("assert_contains failed: {message} (missing {needle})")
+
+fn assert_approx(actual: Float64, expected: Float64, epsilon: Float64 = 0.000001, message: String = ""):
+    if abs(actual - expected) > epsilon:
+        if message.len() == 0:
+            panic("assert_approx failed: expected {expected}, got {actual}, epsilon {epsilon}")
+        panic("assert_approx failed: {message} (expected {expected}, got {actual}, epsilon {epsilon})")
+
+fn it(name: String, fn_ref):
+    __io_write("[CASE] {name} ... ")
+    fn_ref()
+    __io_writeln("ok")
+
+fn suite(name: String):
+    __io_writeln("== {name} ==")
+

@@ -1,0 +1,25 @@
+import std.tensor as tensor
+import std.io as io
+
+fn main():
+    let logits = tensor.tensor([[1.0, 2.0, 3.0], [1.0, 1.0, 1.0]])
+    let probs = logits.softmax(1)
+    let row_sums = probs.sum_axis(1).to_list()
+    if abs(row_sums[0] - 1.0) > 0.000001:
+        panic("softmax row 0 sum mismatch")
+    if abs(row_sums[1] - 1.0) > 0.000001:
+        panic("softmax row 1 sum mismatch")
+
+    let x = tensor.tensor([[1, 2, 3], [4, 5, 6]])
+    let y = x.add(tensor.tensor([10, 20, 30]))
+    let yy = y.to_list()
+    if yy[0][0] != 11 or yy[1][2] != 36:
+        panic("broadcast add mismatch")
+
+    let pred = tensor.tensor([0.9, 0.1, 0.8, 0.2])
+    let target = tensor.tensor([1.0, 0.0, 1.0, 0.0])
+    let loss = tensor.bce_loss(pred, target)
+    if loss <= 0:
+        panic("bce loss should be positive")
+
+    io.println("std.tensor ai ok")

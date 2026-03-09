@@ -218,3 +218,130 @@ Map/pair ops:
 - `from_pairs(items)`
 - `pluck(items, field)`
 - `compact(items)`
+
+## std.tensor
+
+Import:
+
+```aura
+import std.tensor as tensor
+```
+
+Constructors:
+- `tensor(value)`
+- `from_shape(shape, fill = 0.0)`
+- `full(shape, value)`, `zeros(shape)`, `ones(shape)`
+- `rand(shape, min = 0.0, max = 1.0)`
+- `randn(shape, mean = 0.0, std = 1.0)`
+- `eye(n, m = n)`
+- `zeros_like(t)`, `ones_like(t)`, `full_like(t, value)`
+
+Shape/inspection:
+- `shape(t)`, `rank(t)`, `len(t)`
+- `to_list(t)`, `to_flat_list(t)`, `clone(t)`
+- `min(t)`, `max(t)`, `argmin(t)`, `argmax(t)`
+- `sum(t)`, `mean(t)`, `variance(t, sample = false)`, `std(t, sample = false)`
+- `sum_axis(t, axis = -1)`, `mean_axis(t, axis = -1)` (rank-1/rank-2)
+
+Transform/index:
+- `flatten(t)`, `reshape(t, shape)`, `transpose(t)` (rank-2)
+- `get(t, i)`, `set(t, i, value)`
+- `at(t, i)`, `at2(t, i, j)`, `at3(t, i, j, k)`
+- `set_at(t, i, value)`, `set_at2(t, i, j, value)`, `set_at3(t, i, j, k, value)`
+- `map(t, fn_ref)`, `zip_map(a, b, fn_ref)`
+
+Math/activations:
+- `add`, `sub`, `mul`, `div` (with scalar + broadcast-compatible tensor)
+- In-place: `add_`, `sub_`, `mul_`, `div_`, `fill_`
+- `exp`, `log`, `pow`, `sqrt`, `abs`, `clip`
+- `sigmoid`, `relu`, `tanh`, `softmax`, `log_softmax`
+- `l2_norm`, `normalize`, `standardize`, `min_max_scale`
+
+Linear algebra:
+- `dot(a, b)` (vector dot)
+- `matmul(a, b)` (rank-1/rank-2 combinations)
+
+Loss/metrics:
+- `mse_loss(pred, target)`
+- `bce_loss(pred, target, eps = 1e-12)`
+- `bce_with_logits(logits, target, eps = 1e-12)`
+- `nll_loss(log_probs, target)`
+- `cross_entropy_loss(pred_probs, target, eps = 1e-12)`
+- `cross_entropy_with_logits(logits, target, axis = -1)`
+- `binary_accuracy(pred, target, threshold = 0.5)`
+- `classification_accuracy(scores, target)`
+
+Init + utility creators:
+- `xavier_uniform(shape, fan_in, fan_out)`
+- `xavier_normal(shape, fan_in, fan_out)`
+- `he_uniform(shape, fan_in)`
+- `he_normal(shape, fan_in)`
+- `arange(start, end?, step = 1.0)`
+- `linspace(start, stop, n)`
+- `one_hot(indices, num_classes)`
+## std.test
+
+Import:
+
+```aura
+import std.test as test
+```
+
+Assertions:
+- `fail(message = "test failed")`
+- `assert_true(value, message = "")`
+- `assert_false(value, message = "")`
+- `assert_equal(actual, expected, message = "")`
+- `assert_not_equal(actual, expected, message = "")`
+- `assert_nil(value, message = "")`
+- `assert_not_nil(value, message = "")`
+- `assert_contains(haystack, needle, message = "")`
+- `assert_approx(actual, expected, epsilon = 0.000001, message = "")`
+
+Helpers:
+- `suite(name)`
+- `it(name, fn_ref)`
+
+`aura test [path]` discovers files ending in `*.test.aura` or `*_test.aura` (default root: `./tests`).
+
+
+
+## std.schema
+
+Import:
+
+```aura
+import std.schema as schema
+```
+
+Schema builders:
+- `any()`
+- `string(trim = false, min_len = 0, max_len = -1)`
+- `int(min = nil, max = nil)`
+- `float(min = nil, max = nil)`
+- `bool()`
+- `literal(value)`
+- `one_of(values)`
+- `list(item_schema, min_len = 0, max_len = -1)`
+- `optional(schema)`
+- `union(options)`
+- `refine(schema, predicate, message = "refinement failed")`
+- `object(fields, allow_extra = false)`
+
+Object field helpers:
+- `req(schema)`
+- `opt(schema)`
+- `defaulted(schema, default_value)`
+- `field(schema, required = true, has_default = false, default_value = nil)`
+
+Validation/coercion:
+- `parse(schema, value) -> Result`
+- `validate(schema, value) -> Result`
+- `parse_or(schema, value, fallback)`
+- `explain(error) -> String`
+
+Versioning/migrations:
+- `migration(from_version, to_version, run_fn)`
+- `migrate(value, current_version, target_version, migrations) -> Result`
+- `parse_versioned(schemas_by_version, target_version, value, version_field = "version", migrations = []) -> Result`
+

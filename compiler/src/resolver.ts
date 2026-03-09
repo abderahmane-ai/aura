@@ -3,7 +3,7 @@ import { compileError } from './errors.js';
 
 const BUILTINS = new Set<string>([
     'print', 'len', 'min', 'max', 'str', 'int', 'float', 'abs', 'sqrt', 'range', 'List',
-    'Stack', 'Queue', 'LinkedList', 'HashMap', 'Heap', 'TreeMap', 'Indexed',
+    'Stack', 'Queue', 'LinkedList', 'HashMap', 'Heap', 'TreeMap', 'Indexed', 'Tensor', 'TensorShape', 'TensorRand', 'TensorRandn', 'TensorEye',
     'to_list', 'sum', 'sort', 'unique', 'top_k', 'freq', 'chunk', 'window', 'take', 'drop',
     'Option', 'Some', 'None', 'Result', 'Ok', 'Err',
     'is_some', 'is_none', 'is_ok', 'is_err',

@@ -1,0 +1,23 @@
+import std.tensor as tensor
+import std.io as io
+
+fn main():
+    let logits = tensor.tensor([[2.0, 0.5, 0.1], [0.2, 0.4, 1.1]])
+    let ce = tensor.cross_entropy_with_logits(logits, [0, 2])
+    if ce <= 0:
+        panic("cross entropy should be positive")
+
+    let acc = tensor.classification_accuracy(logits, [0, 2])
+    if abs(acc - 1.0) > 0.000001:
+        panic("classification accuracy mismatch")
+
+    let w = tensor.xavier_uniform([8, 4], 4, 8)
+    if w.shape()[0] != 8 or w.shape()[1] != 4:
+        panic("xavier shape mismatch")
+
+    let t = tensor.tensor([[1, 2], [3, 4]])
+    tensor.set_at2(t, 1, 1, 9)
+    if tensor.at2(t, 1, 1) != 9:
+        panic("set_at2/at2 mismatch")
+
+    io.println("std.tensor ai training utils ok")

@@ -472,8 +472,19 @@ Available MVP modules:
 - `std.json` (parse/try_parse/valid/stringify/path helpers)
 - `std.time` (durations, clocks, parse/format, timer/profile helpers)
 - `std.collections` (pipelines + grouping + set-like list operations)
+- `std.test` (assertions + lightweight test-case helpers)
+- `std.schema` (data contracts, coercion, validation, and versioned migration)
 
 Full reference: `docs/STDLIB.md`.
+
+Test runner command:
+
+```powershell
+# from compiler/
+node dist/main.js test ../tests
+# or after install
+aura test
+```
 
 ```aura
 import std.fs as fs
@@ -505,3 +516,4 @@ fn main():
 - Constraints + measures: `examples/data_types.aura`
 - Imports + map/filter: `examples/imports_map_filter.aura`
 - Math module: `examples/math_library.aura`
+

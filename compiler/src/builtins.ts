@@ -18,6 +18,11 @@ interface NativeIndexedData {
     maps: Map<string, Map<string, number[]>>;
 }
 
+interface NativeTensorData {
+    shape: number[];
+    values: number[];
+}
+
 function isList(v: Value): v is AuraList {
     return typeof v === 'object' && v !== null && (v as any).type === 'list';
 }
@@ -38,6 +43,139 @@ function isIndexedData(data: unknown): data is NativeIndexedData {
     const d = data as NativeIndexedData;
     return typeof d === 'object' && d !== null &&
         Array.isArray(d.keys) && Array.isArray(d.items) && d.maps instanceof Map;
+}
+
+function tensorSize(shape: number[]): number {
+    let size = 1;
+    for (const dim of shape) size *= dim;
+    return size;
+}
+
+function isTensorData(data: unknown): data is NativeTensorData {
+    const d = data as NativeTensorData;
+    return typeof d === 'object' && d !== null &&
+        Array.isArray(d.shape) && Array.isArray(d.values) &&
+        d.shape.every((dim) => Number.isInteger(dim) && dim >= 0) &&
+        d.values.every((v) => typeof v === 'number') &&
+        tensorSize(d.shape) === d.values.length;
+}
+
+function tensorToNested(shape: number[], values: number[]): Value {
+    if (shape.length === 0) return values[0] ?? 0;
+    if (shape.length === 1) return { type: 'list', items: values.map((v) => v as Value) } as AuraList;
+    const step = tensorSize(shape.slice(1));
+    const out: Value[] = [];
+    for (let i = 0; i < shape[0]; i++) {
+        const start = i * step;
+        out.push(tensorToNested(shape.slice(1), values.slice(start, start + step)));
+    }
+    return { type: 'list', items: out } as AuraList;
+}
+
+function flattenTensorInput(input: Value): { shape: number[]; values: number[] } {
+    const walk = (value: Value, path: string): { shape: number[]; values: number[] } => {
+        if (typeof value === 'number') return { shape: [], values: [value] };
+        if (!isList(value)) runtimeError('Tensor expects numeric values, invalid entry at ' + path);
+
+        const items = value.items;
+        if (items.length === 0) return { shape: [0], values: [] };
+
+        const first = walk(items[0], path + '[0]');
+        const childShape = first.shape;
+        const out = [...first.values];
+
+        for (let i = 1; i < items.length; i++) {
+            const child = walk(items[i], path + '[' + i + ']');
+            if (child.shape.length !== childShape.length || child.shape.some((dim, idx) => dim !== childShape[idx])) {
+                runtimeError('Tensor expects rectangular nested lists; shape mismatch at ' + path + '[' + i + ']');
+            }
+            out.push(...child.values);
+        }
+
+        return { shape: [items.length, ...childShape], values: out };
+    };
+
+    const flat = walk(input, 'tensor');
+    if (flat.shape.length === 0) return { shape: [1], values: flat.values };
+    return flat;
+}
+
+function makeTensorFromValue(value: Value): AuraNative {
+    if (isNative(value) && value.kind === 'tensor' && isTensorData(value.data)) {
+        const data = value.data;
+        return { type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: [...data.values] } as NativeTensorData };
+    }
+    if (typeof value === 'number') {
+        return { type: 'native', kind: 'tensor', data: { shape: [1], values: [value] } as NativeTensorData };
+    }
+    if (!isList(value)) runtimeError('Tensor(value) expects a number, list, or tensor');
+    const data = flattenTensorInput(value);
+    return { type: 'native', kind: 'tensor', data };
+}
+
+function tensorDims(shapeValue: Value, context: string): number[] {
+    if (!isList(shapeValue)) runtimeError(context + ' expects shape as list of dimensions');
+    const dims: number[] = [];
+    for (const entry of shapeValue.items) {
+        const dim = asNumber(entry, context + ' shape');
+        const n = Math.trunc(dim);
+        if (n < 0 || n !== dim) runtimeError(context + ' dimensions must be non-negative integers');
+        dims.push(n);
+    }
+    if (dims.length === 0) runtimeError(context + ' requires at least one dimension');
+    return dims;
+}
+
+function makeTensorFromShape(shapeValue: Value, fillValue: Value): AuraNative {
+    const dims = tensorDims(shapeValue, 'TensorShape');
+    const fill = fillValue === undefined ? 0 : asNumber(fillValue, 'TensorShape fill');
+    const size = tensorSize(dims);
+    return { type: 'native', kind: 'tensor', data: { shape: dims, values: new Array(size).fill(fill) } as NativeTensorData };
+}
+
+function makeTensorRandom(shapeValue: Value, minValue: Value, maxValue: Value): AuraNative {
+    const dims = tensorDims(shapeValue, 'TensorRand');
+    const min = minValue === undefined ? 0 : asNumber(minValue, 'TensorRand min');
+    const max = maxValue === undefined ? 1 : asNumber(maxValue, 'TensorRand max');
+    if (max < min) runtimeError('TensorRand expects max >= min');
+    const size = tensorSize(dims);
+    const span = max - min;
+    const values = new Array<number>(size);
+    for (let i = 0; i < size; i++) values[i] = min + Math.random() * span;
+    return { type: 'native', kind: 'tensor', data: { shape: dims, values } as NativeTensorData };
+}
+
+function makeTensorRandomNormal(shapeValue: Value, meanValue: Value, stdValue: Value): AuraNative {
+    const dims = tensorDims(shapeValue, 'TensorRandn');
+    const mean = meanValue === undefined ? 0 : asNumber(meanValue, 'TensorRandn mean');
+    const std = stdValue === undefined ? 1 : asNumber(stdValue, 'TensorRandn std');
+    if (std < 0) runtimeError('TensorRandn expects std >= 0');
+    const size = tensorSize(dims);
+    const values = new Array<number>(size);
+    let i = 0;
+    while (i < size) {
+        const u1 = Math.max(Number.MIN_VALUE, Math.random());
+        const u2 = Math.random();
+        const r = Math.sqrt(-2 * Math.log(u1));
+        const z0 = r * Math.cos(2 * Math.PI * u2);
+        const z1 = r * Math.sin(2 * Math.PI * u2);
+        values[i++] = mean + std * z0;
+        if (i < size) values[i++] = mean + std * z1;
+    }
+    return { type: 'native', kind: 'tensor', data: { shape: dims, values } as NativeTensorData };
+}
+
+function makeTensorEye(nValue: Value, mValue: Value): AuraNative {
+    const nRaw = asNumber(nValue, 'TensorEye n');
+    const n = Math.trunc(nRaw);
+    if (n < 0 || n !== nRaw) runtimeError('TensorEye n must be a non-negative integer');
+    const mRaw = mValue === undefined ? n : asNumber(mValue, 'TensorEye m');
+    const m = Math.trunc(mRaw);
+    if (m < 0 || m !== mRaw) runtimeError('TensorEye m must be a non-negative integer');
+    const values = new Array<number>(n * m).fill(0);
+    const diag = Math.min(n, m);
+    for (let i = 0; i < diag; i++) values[i * m + i] = 1;
+    return { type: 'native', kind: 'tensor', data: { shape: [n, m], values } as NativeTensorData };
 }
 
 function asNumber(v: Value, context: string): number {
@@ -87,6 +225,7 @@ function toArray(v: Value): Value[] {
         if (v.kind === 'hashmap' || v.kind === 'tree') return [...(v.data as Map<string, Value>).values()];
         if (v.kind === 'heap') return isHeapData(v.data) ? [...v.data.items] : [];
         if (v.kind === 'indexed') return isIndexedData(v.data) ? [...v.data.items] : [];
+        if (v.kind === 'tensor') return isTensorData(v.data) ? v.data.values.map((n) => n as Value) : [];
         if (Array.isArray(v.data)) return [...v.data];
     }
     runtimeError(`Expected collection, got ${auraToString(v)}`);
@@ -211,6 +350,9 @@ function valueToJs(input: Value): unknown {
             const out: Record<string, unknown> = {};
             for (const [k, v] of (n.data as Map<string, Value>).entries()) out[k] = valueToJs(v);
             return out;
+        }
+        if (n.kind === 'tensor' && isTensorData(n.data)) {
+            return valueToJs(tensorToNested(n.data.shape, n.data.values));
         }
         if (Array.isArray(n.data)) return n.data.map((v: Value) => valueToJs(v));
     }
@@ -368,10 +510,14 @@ export function auraToString(v: Value): string {
         }
         if (native.kind === 'indexed') {
             const data = isIndexedData(native.data) ? native.data : { keys: [], items: [], maps: new Map() };
-            return `<indexed keys=[${data.keys.join(', ')}] items=[${data.items.map(auraToString).join(', ')}]>`;
+            return '<indexed keys=[' + data.keys.join(', ') + '] items=[' + data.items.map(auraToString).join(', ') + ']>';
+        }
+        if (native.kind === 'tensor') {
+            const data = isTensorData(native.data) ? native.data : { shape: [0], values: [] };
+            return '<tensor shape=[' + data.shape.join(', ') + '] values=[' + data.values.join(', ') + ']>';
         }
         const arr = Array.isArray(native.data) ? native.data : [];
-        return `<${native.kind} [${arr.map(auraToString).join(', ')}]>`;
+        return '<' + native.kind + ' [' + arr.map(auraToString).join(', ') + ']>';
     }
     return String(v);
 }
@@ -788,6 +934,7 @@ export function makeBuiltins(): Map<string, Value> {
             if (native.kind === 'hashmap' || native.kind === 'tree') return (native.data as Map<string, Value>).size;
             if (native.kind === 'heap') return isHeapData(native.data) ? native.data.items.length : 0;
             if (native.kind === 'indexed') return isIndexedData(native.data) ? native.data.items.length : 0;
+            if (native.kind === 'tensor') return isTensorData(native.data) ? native.data.values.length : 0;
             if (Array.isArray(native.data)) return native.data.length;
         }
         runtimeError(`len() not supported on ${typeof v}`);
@@ -885,6 +1032,26 @@ export function makeBuiltins(): Map<string, Value> {
         }
         const keys = args.map((v) => auraToString(v));
         return makeIndexed(keys);
+    }));
+    b.set('Tensor', builtin('Tensor', (args) => {
+        if (args.length !== 1) runtimeError('Tensor(value) expects exactly one argument');
+        return makeTensorFromValue(args[0]);
+    }));
+    b.set('TensorShape', builtin('TensorShape', (args) => {
+        if (args.length < 1 || args.length > 2) runtimeError('TensorShape(shape, fill?) expects 1 or 2 arguments');
+        return makeTensorFromShape(args[0], args[1]);
+    }));
+    b.set('TensorRand', builtin('TensorRand', (args) => {
+        if (args.length < 1 || args.length > 3) runtimeError('TensorRand(shape, min?, max?) expects 1 to 3 arguments');
+        return makeTensorRandom(args[0], args[1], args[2]);
+    }));
+    b.set('TensorRandn', builtin('TensorRandn', (args) => {
+        if (args.length < 1 || args.length > 3) runtimeError('TensorRandn(shape, mean?, std?) expects 1 to 3 arguments');
+        return makeTensorRandomNormal(args[0], args[1], args[2]);
+    }));
+    b.set('TensorEye', builtin('TensorEye', (args) => {
+        if (args.length < 1 || args.length > 2) runtimeError('TensorEye(n, m?) expects 1 or 2 arguments');
+        return makeTensorEye(args[0], args[1]);
     }));
 
     b.set('to_list', builtin('to_list', ([v]) => makeList(toArray(v))));
@@ -986,6 +1153,10 @@ export function makeIterator(v: Value): AuraIterator {
         }
         if (native.kind === 'indexed') {
             const items = isIndexedData(native.data) ? [...native.data.items] : [];
+            return { type: 'iter', source: { type: 'list', items }, index: 0 };
+        }
+        if (native.kind === 'tensor') {
+            const items = isTensorData(native.data) ? native.data.values.map((v) => v as Value) : [];
             return { type: 'iter', source: { type: 'list', items }, index: 0 };
         }
         const items = Array.isArray(native.data) ? [...native.data] : [];

@@ -10,6 +10,15 @@ type TypeGuard =
     | { kind: 'constraint'; name: string; checker: string }
     | { kind: 'measure'; dimension: string };
 
+type FunctionCompileState = {
+    scopeBase: number;
+    slotScopes: Map<string, number>[];
+    nextSlot: number;
+    maxSlot: number;
+    paramSlots: number[];
+    selfSlot?: number;
+};
+
 export class Compiler {
     private chunk: Chunk;
     private scopes: ScopeFrame[] = [];
@@ -21,6 +30,8 @@ export class Compiler {
     private typeGuardScopes: Map<string, TypeGuard>[] = [];
     private loopStarts: number[] = [];
     private breakPatches: number[][] = [];
+    private functionStates: FunctionCompileState[] = [];
+    private constIndexByChunk = new WeakMap<Chunk, Map<string, number>>();
 
     constructor(private file: string, private options: { autoInvokeMain?: boolean } = {}) {
         this.chunk = { name: '<top>', file, code: [], constants: [] };
@@ -62,12 +73,13 @@ export class Compiler {
                 if (guard && node.value) this.emitGuardCheck(guard, node.line);
                 if (this.scopes.length > 0) {
                     this.scopes[this.scopes.length - 1].set(node.name, true);
+                    this.declareLocalSlot(node.name);
                     if (guard && this.typeGuardScopes.length > 0) {
                         this.typeGuardScopes[this.typeGuardScopes.length - 1].set(node.name, guard);
                     } else if (this.typeGuardScopes.length > 0) {
                         this.typeGuardScopes[this.typeGuardScopes.length - 1].delete(node.name);
                     }
-                    this.emit('SET_LOCAL', node.name, node.line);
+                    this.emitSet(node.name, node.line);
                 } else {
                     if (guard) this.globalTypeGuards.set(node.name, guard);
                     else this.globalTypeGuards.delete(node.name);
@@ -123,7 +135,8 @@ export class Compiler {
                 this.emit('PUSH_CONST', this.addConst(fn), node.line);
                 if (this.scopes.length > 0) {
                     this.scopes[this.scopes.length - 1].set(node.name, true);
-                    this.emit('SET_LOCAL', node.name, node.line);
+                    this.declareLocalSlot(node.name);
+                    this.emitSet(node.name, node.line);
                 } else {
                     this.emit('DEFINE_GLOBAL', node.name, node.line);
                 }
@@ -241,7 +254,8 @@ export class Compiler {
                 // Push scope for loop variable
                 this.pushScope();
                 this.scopes[this.scopes.length - 1].set(node.name, true);
-                this.emit('SET_LOCAL', node.name, node.line);
+                this.declareLocalSlot(node.name);
+                this.emitSet(node.name, node.line);
                 this.emit_node(node.body);
                 this.popScope();
                 this.emit('JUMP', loopStart, node.line);
@@ -276,8 +290,9 @@ export class Compiler {
                         if (pat.kind === 'IdentPattern') {
                             this.pushScope();
                             this.scopes[this.scopes.length - 1].set(pat.name, true);
+                            this.declareLocalSlot(pat.name);
                             this.emit('DUP', undefined, node.line);
-                            this.emit('SET_LOCAL', pat.name, node.line);
+                            this.emitSet(pat.name, node.line);
                         }
                         this.emit_node(c.body);
                         this.emit('POP', undefined, node.line); // pop match subject
@@ -291,7 +306,8 @@ export class Compiler {
                         this.pushScope();
                         for (const b of [...pat.bindings].reverse()) {
                             this.scopes[this.scopes.length - 1].set(b, true);
-                            this.emit('SET_LOCAL', b, node.line);
+                            this.declareLocalSlot(b);
+                            this.emitSet(b, node.line);
                         }
                         this.emit_node(c.body);
                         this.emit('POP', undefined, node.line); // pop match subject
@@ -464,22 +480,38 @@ export class Compiler {
         const savedChunk = this.chunk;
         const fnChunk: Chunk = { name: node.name, file: this.file, code: [], constants: [] };
         this.chunk = fnChunk;
+
+        const fnState: FunctionCompileState = {
+            scopeBase: this.scopes.length,
+            slotScopes: [],
+            nextSlot: 0,
+            maxSlot: 0,
+            paramSlots: [],
+        };
+        this.functionStates.push(fnState);
+
         this.pushScope();
-        // self is always first local for methods
+
         if (this.classStack.length > 0) {
             this.scopes[this.scopes.length - 1].set('self', true);
+            fnState.selfSlot = this.declareLocalSlot('self');
         }
+
         const params: Param[] = node.params.map((p) => ({
             ...p,
             defaultVal: this.tryConstValue(p.defaultVal as ASTNode | undefined),
         }));
+
         for (const p of params) {
             this.scopes[this.scopes.length - 1].set(p.name, true);
+            const slot = this.declareLocalSlot(p.name);
+            if (slot !== undefined) fnState.paramSlots.push(slot);
             const guard = this.guardFromTypeAnn(p.typeAnn);
             if (guard && this.typeGuardScopes.length > 0) {
                 this.typeGuardScopes[this.typeGuardScopes.length - 1].set(p.name, guard);
             }
         }
+
         for (const p of params) {
             const guard = this.guardFromTypeAnn(p.typeAnn);
             if (!guard) continue;
@@ -487,18 +519,24 @@ export class Compiler {
             this.emitGuardCheck(guard, node.line);
             this.emitSet(p.name, node.line);
         }
+
         this.emit_node(node.body);
-        // Implicit nil return
         this.emit('PUSH_NIL', undefined, node.line);
         this.emit('RETURN', undefined, node.line);
+
         this.popScope();
+        this.functionStates.pop();
         this.chunk = savedChunk;
+
         return {
             type: 'function',
             name: node.name,
             params,
             chunk: fnChunk,
             closure: [],
+            paramSlots: fnState.paramSlots,
+            localCount: fnState.maxSlot,
+            selfSlot: fnState.selfSlot,
         };
     }
 
@@ -545,17 +583,57 @@ export class Compiler {
     }
 
     private emitGet(name: string, line: number): void {
-        for (let i = this.scopes.length - 1; i >= 0; i--) {
-            if (this.scopes[i].has(name)) { this.emit('GET_LOCAL', name, line); return; }
+        for (let i = this.scopes.length - 1; i >= this.currentScopeFloor(); i--) {
+            if (!this.scopes[i].has(name)) continue;
+            const slot = this.lookupLocalSlot(name);
+            if (slot !== undefined) this.emit('GET_LOCAL_SLOT', slot, line);
+            else this.emit('GET_LOCAL', name, line);
+            return;
         }
         this.emit('GET_GLOBAL', name, line);
     }
 
     private emitSet(name: string, line: number): void {
-        for (let i = this.scopes.length - 1; i >= 0; i--) {
-            if (this.scopes[i].has(name)) { this.emit('SET_LOCAL', name, line); return; }
+        for (let i = this.scopes.length - 1; i >= this.currentScopeFloor(); i--) {
+            if (!this.scopes[i].has(name)) continue;
+            const slot = this.lookupLocalSlot(name);
+            if (slot !== undefined) this.emit('SET_LOCAL_SLOT', slot, line);
+            else this.emit('SET_LOCAL', name, line);
+            return;
         }
         this.emit('SET_GLOBAL', name, line);
+    }
+
+    private currentFunctionState(): FunctionCompileState | undefined {
+        return this.functionStates[this.functionStates.length - 1];
+    }
+
+    private currentScopeFloor(): number {
+        const fnState = this.currentFunctionState();
+        return fnState ? fnState.scopeBase : 0;
+    }
+
+    private declareLocalSlot(name: string): number | undefined {
+        const fnState = this.currentFunctionState();
+        if (!fnState) return undefined;
+        const current = fnState.slotScopes[fnState.slotScopes.length - 1];
+        if (!current) return undefined;
+        const existing = current.get(name);
+        if (existing !== undefined) return existing;
+        const slot = fnState.nextSlot++;
+        current.set(name, slot);
+        if (fnState.nextSlot > fnState.maxSlot) fnState.maxSlot = fnState.nextSlot;
+        return slot;
+    }
+
+    private lookupLocalSlot(name: string): number | undefined {
+        const fnState = this.currentFunctionState();
+        if (!fnState) return undefined;
+        for (let i = fnState.slotScopes.length - 1; i >= 0; i--) {
+            const slot = fnState.slotScopes[i].get(name);
+            if (slot !== undefined) return slot;
+        }
+        return undefined;
     }
 
     private emitArith(op: string, line: number): void {
@@ -574,7 +652,7 @@ export class Compiler {
     }
 
     private lookupGuard(name: string): TypeGuard | undefined {
-        for (let i = this.scopes.length - 1; i >= 0; i--) {
+        for (let i = this.scopes.length - 1; i >= this.currentScopeFloor(); i--) {
             if (this.scopes[i].has(name)) {
                 return this.typeGuardScopes[i].get(name);
             }
@@ -649,8 +727,35 @@ export class Compiler {
     }
 
     private addConst(v: Value): number {
+        const cache = this.chunkConstCache();
+        const key = this.primitiveConstKey(v);
+        if (key !== undefined) {
+            const existing = cache.get(key);
+            if (existing !== undefined) return existing;
+            this.chunk.constants.push(v);
+            const idx = this.chunk.constants.length - 1;
+            cache.set(key, idx);
+            return idx;
+        }
         this.chunk.constants.push(v);
         return this.chunk.constants.length - 1;
+    }
+
+    private chunkConstCache(): Map<string, number> {
+        let cache = this.constIndexByChunk.get(this.chunk);
+        if (!cache) {
+            cache = new Map<string, number>();
+            this.constIndexByChunk.set(this.chunk, cache);
+        }
+        return cache;
+    }
+
+    private primitiveConstKey(v: Value): string | undefined {
+        if (v === null) return 'n:null';
+        if (typeof v === 'boolean') return 'b:' + (v ? '1' : '0');
+        if (typeof v === 'number') return 'd:' + (Object.is(v, -0) ? '-0' : String(v));
+        if (typeof v === 'string') return 's:' + v;
+        return undefined;
     }
 
     private emitJump(op: OpCode, line: number): number {
@@ -665,9 +770,13 @@ export class Compiler {
     private pushScope(): void {
         this.scopes.push(new Map());
         this.typeGuardScopes.push(new Map());
+        const fnState = this.currentFunctionState();
+        if (fnState) fnState.slotScopes.push(new Map());
     }
     private popScope(): void {
         this.scopes.pop();
         this.typeGuardScopes.pop();
+        const fnState = this.currentFunctionState();
+        if (fnState) fnState.slotScopes.pop();
     }
 }

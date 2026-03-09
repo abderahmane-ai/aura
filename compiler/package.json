@@ -12,6 +12,7 @@
         "check:conformance": "powershell -ExecutionPolicy Bypass -File ../scripts/run-conformance.ps1 -SkipBuild",
         "check:all": "npm run build && powershell -NoProfile -Command \"$failed = $false; Get-ChildItem -Path ../examples -Filter *.aura | ForEach-Object { node dist/main.js check $_.FullName; if ($LASTEXITCODE -ne 0) { $failed = $true } }; if ($failed) { exit 1 }\"",
         "check:strict": "npm run check:all && npm run check:conformance",
+        "test": "npm run build && node dist/main.js test ../tests",
         "run:data_types": "npm run build && node dist/main.js run ../examples/data_types.aura",
         "run:loops": "npm run build && node dist/main.js run ../examples/loops.aura",
         "run:functions": "npm run build && node dist/main.js run ../examples/functions.aura",
@@ -27,3 +28,4 @@
         "@types/node": "^20.0.0"
     }
 }
+

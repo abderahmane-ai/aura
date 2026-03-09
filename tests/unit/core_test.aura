@@ -1,0 +1,7 @@
+import std.test as test
+
+fn main():
+    test.suite("basic")
+    test.it("math works", fn() = test.assert_equal(21 * 2, 42))
+    test.it("collections", fn() = test.assert_contains([1, 2, 3], 2))
+

@@ -110,6 +110,7 @@ export type OpCode =
     | 'POP' | 'DUP' | 'SWAP'
     | 'DEFINE_GLOBAL' | 'GET_GLOBAL' | 'SET_GLOBAL'
     | 'GET_LOCAL' | 'SET_LOCAL'
+    | 'GET_LOCAL_SLOT' | 'SET_LOCAL_SLOT'
     | 'ADD' | 'SUB' | 'MUL' | 'DIV' | 'MOD' | 'POW' | 'NEG'
     | 'CONCAT'   // string concat
     | 'EQ' | 'NEQ' | 'LT' | 'GT' | 'LE' | 'GE'
@@ -159,7 +160,7 @@ export interface AuraRange { type: 'range'; start: number; end: number; inclusiv
 export interface AuraIterator { type: 'iter'; source: AuraList | AuraRange; index: number; }
 export interface AuraNative {
     type: 'native';
-    kind: 'stack' | 'queue' | 'heap' | 'hashmap' | 'linked_list' | 'tree' | 'indexed';
+    kind: 'stack' | 'queue' | 'heap' | 'hashmap' | 'linked_list' | 'tree' | 'indexed' | 'tensor';
     data: any;
 }
 export interface AuraMeasure {
@@ -175,6 +176,9 @@ export interface AuraFunction {
     params: Param[];
     chunk: Chunk;
     closure: Scope;
+    paramSlots?: number[];
+    localCount?: number;
+    selfSlot?: number;
     receiver?: AuraInstance;
 }
 export interface AuraClass {
@@ -201,3 +205,4 @@ export interface CallFrame {
     locals: Map<string, Value>;
     receiver?: AuraInstance;
 }
+

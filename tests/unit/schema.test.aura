@@ -1,0 +1,14 @@
+import std.schema as schema
+import std.test as test
+
+fn main():
+    let profile = schema.object({"id": schema.req(schema.int(1, nil)), "active": schema.defaulted(schema.bool(), true), "tags": schema.defaulted(schema.list(schema.string(true, 1), 0, -1), [])})
+    let parsed = schema.parse(profile, {"id": 7, "active": "false"})
+
+    test.assert_true(parsed.is_ok(), "schema.parse should succeed")
+
+    let value = parsed.unwrap()
+    test.assert_equal(value["id"], 7)
+    test.assert_false(value["active"])
+    test.assert_equal(value["tags"].len(), 0)
+

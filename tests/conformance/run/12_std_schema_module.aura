@@ -1,0 +1,43 @@
+import std.schema as schema
+import std.io as io
+
+fn main():
+    let v1 = schema.object({"version": schema.req(schema.int(1, 1)), "name": schema.req(schema.string(true, 1, 80)), "age": schema.opt(schema.int(0, 130))})
+    let v2 = schema.object({"version": schema.req(schema.int(2, 2)), "full_name": schema.req(schema.string(true, 1, 120)), "age": schema.defaulted(schema.int(0, 130), 0)})
+    let input = {"version": 1, "name": "  Ada Lovelace  "}
+
+    let parsed_v1 = schema.parse(v1, input)
+    if parsed_v1.is_err():
+        panic(schema.explain(parsed_v1.unwrap_err()))
+
+    let one = parsed_v1.unwrap()
+    if one["name"] != "Ada Lovelace":
+        panic("name trim/coercion failed")
+    if one["age"] != nil:
+        panic("optional age should be nil")
+
+    let migrations = [schema.migration(1, 2, fn(doc):
+        let out = {"version": 2, "full_name": doc["name"]}
+        if doc["age"] != nil:
+            out["age"] = doc["age"]
+        return out
+    )]
+
+    let schemas = {"1": v1, "2": v2}
+    let upgraded = schema.parse_versioned(schemas, 2, input, "version", migrations)
+    if upgraded.is_err():
+        panic(schema.explain(upgraded.unwrap_err()))
+
+    let user = upgraded.unwrap()
+    if user["full_name"] != "Ada Lovelace":
+        panic("migration full_name failed")
+    if user["age"] != 0:
+        panic("default age failed")
+
+    let state_schema = schema.one_of(["new", "active", "disabled"])
+    let state = schema.parse(state_schema, "active")
+    if state.is_err():
+        panic("enum validation failed")
+
+    io.println("std.schema ok")
+

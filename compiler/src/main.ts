@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, dirname, extname, resolve as resolvePath, sep as pathSep } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, extname, relative, resolve as resolvePath, sep as pathSep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { Lexer } from './lexer.js';
@@ -29,6 +29,8 @@ interface ModuleRecord {
 interface ModuleState {
     cache: Map<string, ModuleRecord>;
     loading: Set<string>;
+    importPathCache: Map<string, string>;
+    stdlibPathCache: Map<string, string | null>;
 }
 
 function usage(): void {
@@ -37,6 +39,7 @@ function usage(): void {
         '  aurac <file>\n' +
         '  aurac run <file>\n' +
         '  aurac check <file>\n' +
+        '  aurac test [path]\n' +
         '  aurac repl\n' +
         '  aurac version\n',
     );
@@ -54,34 +57,55 @@ function importBindingName(node: ImportStmt): string {
     return parts[parts.length - 1];
 }
 
-function findStdlibModule(fromFile: string, stdRel: string): string | null {
+function findStdlibModule(fromFile: string, stdRel: string, state: ModuleState): string | null {
+    const cacheKey = fromFile + '\0' + stdRel;
+    const cached = state.stdlibPathCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
     const roots = [dirname(fromFile), process.cwd(), REPO_ROOT];
     for (const root of roots) {
         let cur = resolvePath(root);
         while (true) {
             const candidate = resolvePath(cur, 'stdlib', stdRel);
-            if (existsSync(candidate)) return candidate;
+            if (existsSync(candidate)) {
+                state.stdlibPathCache.set(cacheKey, candidate);
+                return candidate;
+            }
             const parent = resolvePath(cur, '..');
             if (parent === cur) break;
             cur = parent;
         }
     }
+    state.stdlibPathCache.set(cacheKey, null);
     return null;
 }
 
-function resolveImportPath(fromFile: string, modulePath: string): string {
+function resolveImportPath(fromFile: string, modulePath: string, state: ModuleState): string {
+    const cacheKey = fromFile + '\0' + modulePath;
+    const cached = state.importPathCache.get(cacheKey);
+    if (cached) return cached;
+
     if (modulePath.startsWith('std.')) {
         const stdRel = modulePath.slice('std.'.length).split('.').join(pathSep) + '.aura';
-        const stdCandidate = findStdlibModule(fromFile, stdRel);
-        if (stdCandidate) return stdCandidate;
+        const stdCandidate = findStdlibModule(fromFile, stdRel, state);
+        if (stdCandidate) {
+            state.importPathCache.set(cacheKey, stdCandidate);
+            return stdCandidate;
+        }
     }
     const rel = modulePath.split('.').join(pathSep) + '.aura';
     const candidateLocal = resolvePath(dirname(fromFile), rel);
-    if (existsSync(candidateLocal)) return candidateLocal;
+    if (existsSync(candidateLocal)) {
+        state.importPathCache.set(cacheKey, candidateLocal);
+        return candidateLocal;
+    }
     const candidateCwd = resolvePath(process.cwd(), rel);
-    if (existsSync(candidateCwd)) return candidateCwd;
+    if (existsSync(candidateCwd)) {
+        state.importPathCache.set(cacheKey, candidateCwd);
+        return candidateCwd;
+    }
     throw new AuraError(
-        `Cannot resolve import '${modulePath}'`,
+        'Cannot resolve import ' + "'" + modulePath + "'",
         fromFile,
         0,
         0,
@@ -160,7 +184,7 @@ function checkModule(file: string, state: ModuleState): void {
     state.loading.add(file);
     try {
         for (const imp of rec.imports) {
-            const depPath = resolveImportPath(file, imp.path);
+            const depPath = resolveImportPath(file, imp.path, state);
             checkModule(depPath, state);
         }
         new Resolver(file).resolve(rec.ast);
@@ -181,7 +205,7 @@ function executeModule(file: string, state: ModuleState, vm: VM, isEntry = false
     const globalsBefore = isEntry ? null : vm.snapshotGlobals();
     try {
         for (const imp of rec.imports) {
-            const depPath = resolveImportPath(file, imp.path);
+            const depPath = resolveImportPath(file, imp.path, state);
             const dep = executeModule(depPath, state, vm, false);
             if (dep.moduleValue) vm.setGlobal(importBindingName(imp), dep.moduleValue);
         }
@@ -217,15 +241,102 @@ function executeModule(file: string, state: ModuleState, vm: VM, isEntry = false
 
 function runFile(filePath: string): void {
     const absPath = resolvePath(process.cwd(), filePath);
-    const state: ModuleState = { cache: new Map(), loading: new Set() };
+    const state: ModuleState = {
+        cache: new Map(),
+        loading: new Set(),
+        importPathCache: new Map(),
+        stdlibPathCache: new Map(),
+    };
     const vm = new VM();
     executeModule(absPath, state, vm, true);
 }
 
 function checkFile(filePath: string): void {
     const absPath = resolvePath(process.cwd(), filePath);
-    const state: ModuleState = { cache: new Map(), loading: new Set() };
+    const state: ModuleState = {
+        cache: new Map(),
+        loading: new Set(),
+        importPathCache: new Map(),
+        stdlibPathCache: new Map(),
+    };
     checkModule(absPath, state);
+}
+
+function isAuraFile(file: string): boolean {
+    return extname(file).toLowerCase() === '.aura';
+}
+
+function isTestFile(file: string): boolean {
+    const lower = file.toLowerCase();
+    return lower.endsWith('.test.aura') || lower.endsWith('_test.aura');
+}
+
+function discoverTests(targetPath?: string): string[] {
+    const cwd = process.cwd();
+    const root = targetPath ? resolvePath(cwd, targetPath) : resolvePath(cwd, 'tests');
+    if (!existsSync(root)) return [];
+    const rootStats = statSync(root);
+    if (rootStats.isFile()) {
+        if (!isAuraFile(root)) return [];
+        return [root];
+    }
+
+    const out: string[] = [];
+    const walk = (dir: string): void => {
+        const entries = readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const full = resolvePath(dir, entry.name);
+            if (entry.isDirectory()) {
+                walk(full);
+                continue;
+            }
+            if (!entry.isFile()) continue;
+            if (!isTestFile(entry.name)) continue;
+            out.push(full);
+        }
+    };
+    walk(root);
+    out.sort((a, b) => a.localeCompare(b));
+    return out;
+}
+
+function displayTestPath(absPath: string): string {
+    const relPath = relative(process.cwd(), absPath);
+    return relPath.length === 0 ? absPath : relPath;
+}
+
+function runTests(targetPath?: string): number {
+    const files = discoverTests(targetPath);
+    if (files.length === 0) {
+        process.stderr.write(
+            targetPath
+                ? `No test files found in '${targetPath}'. Use *.test.aura or *_test.aura.\n`
+                : "No test files found in './tests'. Use *.test.aura or *_test.aura.\n",
+        );
+        return 1;
+    }
+
+    let passed = 0;
+    let failed = 0;
+    for (const file of files) {
+        const name = displayTestPath(file);
+        try {
+            runFile(file);
+            passed++;
+            process.stdout.write(`[PASS] ${name}\n`);
+        } catch (err) {
+            failed++;
+            process.stdout.write(`[FAIL] ${name}\n`);
+            if (err instanceof AuraError) process.stderr.write(err.format() + '\n');
+            else process.stderr.write(String(err) + '\n');
+        }
+    }
+
+    const total = passed + failed;
+    process.stdout.write(`\nTests run: ${total}\n`);
+    process.stdout.write(`Passed: ${passed}\n`);
+    process.stdout.write(`Failed: ${failed}\n`);
+    return failed === 0 ? 0 : 1;
 }
 
 function maybeWrapReplExpr(ast: Program): Program {
@@ -322,8 +433,10 @@ function runRepl(): void {
 }
 
 function runCli(): number {
-    const [, , cmd, arg] = process.argv;
-    const looksLikeAuraFile = (value: string): boolean => extname(value).toLowerCase() === '.aura';
+    const args = process.argv.slice(2);
+    const cmd = args[0];
+    const arg = args[1];
+    const looksLikeAuraFile = (value: string): boolean => isAuraFile(value);
     try {
         if (cmd && !arg && looksLikeAuraFile(cmd)) {
             runFile(cmd);
@@ -354,6 +467,9 @@ function runCli(): number {
             process.stdout.write(`OK ${resolvePath(process.cwd(), arg)}\n`);
             return 0;
         }
+        if (cmd === 'test') {
+            return runTests(arg);
+        }
         if (cmd === 'repl') {
             runRepl();
             return 0;
@@ -371,3 +487,4 @@ function runCli(): number {
 }
 
 process.exit(runCli());
+

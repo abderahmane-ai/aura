@@ -31,6 +31,7 @@ From `compiler/`:
 
 ```powershell
 npm run check:strict
+npm run test
 ```
 
 This runs:
@@ -174,3 +175,4 @@ Users can define project-specific lint rules in `aura.toml`:
 deny = ["unsafe-unwrap"]
 allow = ["large-function"]
 ```
+
