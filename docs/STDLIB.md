@@ -279,6 +279,92 @@ Init + utility creators:
 - `arange(start, end?, step = 1.0)`
 - `linspace(start, stop, n)`
 - `one_hot(indices, num_classes)`
+## std.optim
+
+Import:
+
+```aura
+import std.optim as optim
+```
+
+Constructors:
+- `sgd(lr = 0.01, momentum = 0.0, dampening = 0.0, nesterov = false, weight_decay = 0.0, maximize = false)`
+- `adam(lr = 0.001, beta1 = 0.9, beta2 = 0.999, eps = 1e-8, weight_decay = 0.0, amsgrad = false, maximize = false)`
+- `adamw(lr = 0.001, beta1 = 0.9, beta2 = 0.999, eps = 1e-8, weight_decay = 0.01, amsgrad = false, maximize = false)`
+- `adamax(lr = 0.002, beta1 = 0.9, beta2 = 0.999, eps = 1e-8, weight_decay = 0.0, maximize = false)`
+- `nadam(lr = 0.002, beta1 = 0.9, beta2 = 0.999, eps = 1e-8, weight_decay = 0.0, maximize = false)`
+- `radam(lr = 0.001, beta1 = 0.9, beta2 = 0.999, eps = 1e-8, weight_decay = 0.0, maximize = false)`
+- `rmsprop(lr = 0.01, alpha = 0.99, eps = 1e-8, weight_decay = 0.0, momentum = 0.0, centered = false, maximize = false)`
+- `adagrad(lr = 0.01, lr_decay = 0.0, weight_decay = 0.0, eps = 1e-10, maximize = false)`
+- `adadelta(lr = 1.0, rho = 0.9, eps = 1e-6, weight_decay = 0.0, maximize = false)`
+- `lion(lr = 1e-4, beta1 = 0.9, beta2 = 0.99, weight_decay = 0.0, maximize = false)`
+- `lookahead(inner_opt, k = 5, alpha = 0.5)`
+
+Core training ops:
+- `step(opt, params, grads, clip_norm = nil, clip_value = nil, grad_scale = 1.0)`
+- `zero_grad(grads)`
+- `clip_grad_value_(grads, clip_value)`
+- `global_grad_norm(grads)`
+- `clip_grad_norm_(grads, max_norm, eps = 1e-12)`
+
+Optimizer controls:
+- `get_lr(opt)`
+- `set_lr(opt, lr)`
+- `state(opt)`
+- `reset_state(opt)`
+
+LR schedule helpers:
+- `lr_constant(base_lr, step_idx)`
+- `lr_step(base_lr, step_idx, step_size, gamma = 0.1)`
+- `lr_exponential(base_lr, step_idx, gamma = 0.99)`
+- `lr_linear_warmup(base_lr, step_idx, warmup_steps)`
+- `lr_cosine(base_lr, step_idx, total_steps, min_lr = 0.0)`
+- `lr_warmup_cosine(base_lr, step_idx, warmup_steps, total_steps, min_lr = 0.0)`
+
+## std.data.synthetic
+
+Import:
+
+```aura
+import std.data.synthetic as synthetic
+```
+
+Dataset generators:
+- `binary_linear(n = 200, input_dim = 2, noise = 0.2, seed = 42)`
+- `multiclass_blobs(num_classes = 3, n_per_class = 100, input_dim = 2, spread = 0.5, radius = 3.0, seed = 42)`
+
+Splitting:
+- `train_test_split(X, y, test_ratio = 0.2, shuffle = true, seed = 42)`
+
+Returns maps containing tensor fields like `X`, `y`, and train/test splits.
+
+## std.ml.logistic
+
+Import:
+
+```aura
+import std.ml.logistic as logistic
+```
+
+Model lifecycle:
+- `init(input_dim, num_classes = 1)`
+- `clone_model(model)`
+
+Inference:
+- `logits(model, X)`
+- `predict_proba(model, X)`
+- `predict(model, X, threshold = 0.5)`
+
+Training/evaluation:
+- `fit(model, X, y, options = {})`
+- `evaluate(model, X, y, l2 = 0.0)`
+- `loss(model, X, y, l2 = 0.0)`
+
+`fit` options:
+- `epochs`, `batch_size`, `lr`, `optimizer`, `l2`
+- `shuffle`, `seed`
+- `clip_norm`, `clip_value`, `grad_scale`
+- `verbose`, `log_every`
 ## std.test
 
 Import:

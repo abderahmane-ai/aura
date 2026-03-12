@@ -1,0 +1,676 @@
+module std.optim
+
+import std.tensor as tensor
+import std.math as math
+
+let EPS = 0.000000000001
+let PI = 3.141592653589793
+let BIG = 999999999999999999999999.0
+
+fn sgd(lr: Float64 = 0.01, momentum: Float64 = 0.0, dampening: Float64 = 0.0, nesterov: Bool = false, weight_decay: Float64 = 0.0, maximize: Bool = false):
+    __require_positive(lr, "optim.sgd lr")
+    if momentum < 0:
+        panic("optim.sgd momentum must be >= 0")
+    if dampening < 0 or dampening > 1:
+        panic("optim.sgd dampening must be in [0, 1]")
+    if weight_decay < 0:
+        panic("optim.sgd weight_decay must be >= 0")
+    return {"name": "sgd", "lr": lr, "momentum": momentum, "dampening": dampening, "nesterov": nesterov, "weight_decay": weight_decay, "maximize": maximize, "step": 0, "state": {}}
+
+fn adam(lr: Float64 = 0.001, beta1: Float64 = 0.9, beta2: Float64 = 0.999, eps: Float64 = 0.00000001, weight_decay: Float64 = 0.0, amsgrad: Bool = false, maximize: Bool = false):
+    return {"name": "adam", "lr": __validated_lr(lr, "optim.adam"), "beta1": __validated_beta(beta1, "optim.adam beta1"), "beta2": __validated_beta(beta2, "optim.adam beta2"), "eps": __validated_eps(eps, "optim.adam eps"), "weight_decay": __validated_non_negative(weight_decay, "optim.adam weight_decay"), "amsgrad": amsgrad, "maximize": maximize, "decoupled_weight_decay": false, "step": 0, "state": {}}
+
+fn adamw(lr: Float64 = 0.001, beta1: Float64 = 0.9, beta2: Float64 = 0.999, eps: Float64 = 0.00000001, weight_decay: Float64 = 0.01, amsgrad: Bool = false, maximize: Bool = false):
+    let opt = adam(lr, beta1, beta2, eps, weight_decay, amsgrad, maximize)
+    opt["name"] = "adamw"
+    opt["decoupled_weight_decay"] = true
+    return opt
+
+fn adamax(lr: Float64 = 0.002, beta1: Float64 = 0.9, beta2: Float64 = 0.999, eps: Float64 = 0.00000001, weight_decay: Float64 = 0.0, maximize: Bool = false):
+    return {"name": "adamax", "lr": __validated_lr(lr, "optim.adamax"), "beta1": __validated_beta(beta1, "optim.adamax beta1"), "beta2": __validated_beta(beta2, "optim.adamax beta2"), "eps": __validated_eps(eps, "optim.adamax eps"), "weight_decay": __validated_non_negative(weight_decay, "optim.adamax weight_decay"), "maximize": maximize, "step": 0, "state": {}}
+
+fn nadam(lr: Float64 = 0.002, beta1: Float64 = 0.9, beta2: Float64 = 0.999, eps: Float64 = 0.00000001, weight_decay: Float64 = 0.0, maximize: Bool = false):
+    return {"name": "nadam", "lr": __validated_lr(lr, "optim.nadam"), "beta1": __validated_beta(beta1, "optim.nadam beta1"), "beta2": __validated_beta(beta2, "optim.nadam beta2"), "eps": __validated_eps(eps, "optim.nadam eps"), "weight_decay": __validated_non_negative(weight_decay, "optim.nadam weight_decay"), "maximize": maximize, "step": 0, "state": {}}
+
+fn radam(lr: Float64 = 0.001, beta1: Float64 = 0.9, beta2: Float64 = 0.999, eps: Float64 = 0.00000001, weight_decay: Float64 = 0.0, maximize: Bool = false):
+    return {"name": "radam", "lr": __validated_lr(lr, "optim.radam"), "beta1": __validated_beta(beta1, "optim.radam beta1"), "beta2": __validated_beta(beta2, "optim.radam beta2"), "eps": __validated_eps(eps, "optim.radam eps"), "weight_decay": __validated_non_negative(weight_decay, "optim.radam weight_decay"), "maximize": maximize, "step": 0, "state": {}}
+
+fn rmsprop(lr: Float64 = 0.01, alpha: Float64 = 0.99, eps: Float64 = 0.00000001, weight_decay: Float64 = 0.0, momentum: Float64 = 0.0, centered: Bool = false, maximize: Bool = false):
+    return {"name": "rmsprop", "lr": __validated_lr(lr, "optim.rmsprop"), "alpha": __validated_beta(alpha, "optim.rmsprop alpha"), "eps": __validated_eps(eps, "optim.rmsprop eps"), "weight_decay": __validated_non_negative(weight_decay, "optim.rmsprop weight_decay"), "momentum": __validated_non_negative(momentum, "optim.rmsprop momentum"), "centered": centered, "maximize": maximize, "step": 0, "state": {}}
+
+fn adagrad(lr: Float64 = 0.01, lr_decay: Float64 = 0.0, weight_decay: Float64 = 0.0, eps: Float64 = 0.0000000001, maximize: Bool = false):
+    return {"name": "adagrad", "lr": __validated_lr(lr, "optim.adagrad"), "lr_decay": __validated_non_negative(lr_decay, "optim.adagrad lr_decay"), "weight_decay": __validated_non_negative(weight_decay, "optim.adagrad weight_decay"), "eps": __validated_eps(eps, "optim.adagrad eps"), "maximize": maximize, "step": 0, "state": {}}
+
+fn adadelta(lr: Float64 = 1.0, rho: Float64 = 0.9, eps: Float64 = 0.000001, weight_decay: Float64 = 0.0, maximize: Bool = false):
+    return {"name": "adadelta", "lr": __validated_lr(lr, "optim.adadelta"), "rho": __validated_beta(rho, "optim.adadelta rho"), "eps": __validated_eps(eps, "optim.adadelta eps"), "weight_decay": __validated_non_negative(weight_decay, "optim.adadelta weight_decay"), "maximize": maximize, "step": 0, "state": {}}
+
+fn lion(lr: Float64 = 0.0001, beta1: Float64 = 0.9, beta2: Float64 = 0.99, weight_decay: Float64 = 0.0, maximize: Bool = false):
+    return {"name": "lion", "lr": __validated_lr(lr, "optim.lion"), "beta1": __validated_beta(beta1, "optim.lion beta1"), "beta2": __validated_beta(beta2, "optim.lion beta2"), "weight_decay": __validated_non_negative(weight_decay, "optim.lion weight_decay"), "maximize": maximize, "step": 0, "state": {}}
+
+fn lookahead(inner_opt, k: Int = 5, alpha: Float64 = 0.5):
+    if inner_opt == nil:
+        panic("optim.lookahead requires inner optimizer")
+    if k <= 0:
+        panic("optim.lookahead expects k > 0")
+    if alpha <= 0 or alpha > 1:
+        panic("optim.lookahead expects alpha in (0, 1]")
+    return {"name": "lookahead", "inner": inner_opt, "k": k, "alpha": alpha, "step": 0, "state": {}}
+fn step(opt, params, grads, clip_norm = nil, clip_value = nil, grad_scale: Float64 = 1.0):
+    let ps = to_list(params)
+    let gs_in = to_list(grads)
+    __validate_params_grads(ps, gs_in)
+
+    let prepared = __prepare_grads(gs_in, grad_scale, clip_value, clip_norm)
+    let name = opt["name"]
+    let t = __next_step(opt)
+
+    if name == "sgd":
+        return __step_sgd(opt, ps, prepared)
+    if name == "adam" or name == "adamw":
+        return __step_adam(opt, ps, prepared, t)
+    if name == "adamax":
+        return __step_adamax(opt, ps, prepared, t)
+    if name == "nadam":
+        return __step_nadam(opt, ps, prepared, t)
+    if name == "radam":
+        return __step_radam(opt, ps, prepared, t)
+    if name == "rmsprop":
+        return __step_rmsprop(opt, ps, prepared)
+    if name == "adagrad":
+        return __step_adagrad(opt, ps, prepared, t)
+    if name == "adadelta":
+        return __step_adadelta(opt, ps, prepared)
+    if name == "lion":
+        return __step_lion(opt, ps, prepared)
+    if name == "lookahead":
+        return __step_lookahead(opt, ps, prepared, t, clip_norm, clip_value, grad_scale)
+
+    panic("optim.step unknown optimizer '{name}'")
+
+fn zero_grad(grads):
+    for g in to_list(grads):
+        if g != nil:
+            g.fill_(0.0)
+    return grads
+
+fn clip_grad_value_(grads, clip_value: Float64):
+    let v = abs(float(clip_value))
+    for g in to_list(grads):
+        if g != nil:
+            __copy_tensor(g, g.clip(-v, v))
+    return grads
+
+fn global_grad_norm(grads):
+    var total = 0.0
+    for g in to_list(grads):
+        if g != nil:
+            total += g.mul(g).sum()
+    return total ** 0.5
+
+fn clip_grad_norm_(grads, max_norm: Float64, eps: Float64 = 0.000000000001):
+    if max_norm <= 0:
+        panic("optim.clip_grad_norm_ expects max_norm > 0")
+    let norm = global_grad_norm(grads)
+    if norm <= max_norm:
+        return norm
+    let scale = max_norm / (norm + eps)
+    for g in to_list(grads):
+        if g != nil:
+            g.mul_(scale)
+    return norm
+
+fn get_lr(opt) -> Float64:
+    if opt["name"] == "lookahead":
+        return get_lr(opt["inner"])
+    return opt["lr"]
+
+fn set_lr(opt, lr: Float64):
+    __require_positive(lr, "optim.set_lr")
+    if opt["name"] == "lookahead":
+        set_lr(opt["inner"], lr)
+        return opt
+    opt["lr"] = lr
+    return opt
+
+fn state(opt):
+    return __state(opt)
+
+fn reset_state(opt):
+    opt["step"] = 0
+    opt["state"] = {}
+    if opt["name"] == "lookahead":
+        reset_state(opt["inner"])
+    return opt
+
+# Schedulers (stateless helpers)
+fn lr_constant(base_lr: Float64, step_idx: Int):
+    return base_lr
+
+fn lr_step(base_lr: Float64, step_idx: Int, step_size: Int, gamma: Float64 = 0.1):
+    if step_size <= 0:
+        panic("optim.lr_step expects step_size > 0")
+    if gamma <= 0:
+        panic("optim.lr_step expects gamma > 0")
+    let k = int(step_idx / step_size)
+    return base_lr * (gamma ** k)
+
+fn lr_exponential(base_lr: Float64, step_idx: Int, gamma: Float64 = 0.99):
+    if gamma <= 0:
+        panic("optim.lr_exponential expects gamma > 0")
+    return base_lr * (gamma ** step_idx)
+
+fn lr_linear_warmup(base_lr: Float64, step_idx: Int, warmup_steps: Int):
+    if warmup_steps <= 0:
+        return base_lr
+    if step_idx <= 0:
+        return 0.0
+    if step_idx >= warmup_steps:
+        return base_lr
+    return base_lr * step_idx / warmup_steps
+
+fn lr_cosine(base_lr: Float64, step_idx: Int, total_steps: Int, min_lr: Float64 = 0.0):
+    if total_steps <= 0:
+        panic("optim.lr_cosine expects total_steps > 0")
+    let t = min(1.0, max(0.0, step_idx / total_steps))
+    return min_lr + (base_lr - min_lr) * 0.5 * (1.0 + math.cos(PI * t))
+
+fn lr_warmup_cosine(base_lr: Float64, step_idx: Int, warmup_steps: Int, total_steps: Int, min_lr: Float64 = 0.0):
+    if step_idx < warmup_steps:
+        return lr_linear_warmup(base_lr, step_idx, warmup_steps)
+    let remain = max(1, total_steps - warmup_steps)
+    return lr_cosine(base_lr, step_idx - warmup_steps, remain, min_lr)
+
+fn __step_sgd(opt, params, grads):
+    let lr = opt["lr"]
+    let momentum = opt["momentum"]
+    let dampening = opt["dampening"]
+    let nesterov = opt["nesterov"] == true
+    let weight_decay = opt["weight_decay"]
+    let maximize = opt["maximize"] == true
+
+    let st = __state(opt)
+    let bufs = __ensure_zero_slots(st, "momentum_buffer", params)
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+            if weight_decay != 0:
+                grad = grad.add(p.mul(weight_decay))
+
+            if momentum != 0:
+                let b = bufs[i]
+                let next_b = b.mul(momentum).add(grad.mul(1.0 - dampening))
+                __copy_tensor(b, next_b)
+                if nesterov:
+                    grad = grad.add(b.mul(momentum))
+                else:
+                    grad = b
+
+            p.sub_(grad.mul(lr))
+        i += 1
+    return opt
+
+fn __step_adam(opt, params, grads, t: Int):
+    let lr = opt["lr"]
+    let b1 = opt["beta1"]
+    let b2 = opt["beta2"]
+    let eps = opt["eps"]
+    let weight_decay = opt["weight_decay"]
+    let amsgrad = opt["amsgrad"] == true
+    let maximize = opt["maximize"] == true
+    let decoupled = opt["decoupled_weight_decay"] == true
+
+    let st = __state(opt)
+    let ms = __ensure_zero_slots(st, "m", params)
+    let vs = __ensure_zero_slots(st, "v", params)
+    let vhs = __ensure_zero_slots(st, "vhat", params)
+
+    let bias1 = 1.0 - (b1 ** t)
+    let bias2 = 1.0 - (b2 ** t)
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+
+            if decoupled and weight_decay != 0:
+                p.mul_(1.0 - lr * weight_decay)
+            elif weight_decay != 0:
+                grad = grad.add(p.mul(weight_decay))
+
+            let m = ms[i]
+            let v = vs[i]
+            __copy_tensor(m, m.mul(b1).add(grad.mul(1.0 - b1)))
+            __copy_tensor(v, v.mul(b2).add(grad.mul(grad).mul(1.0 - b2)))
+
+            let m_hat = m.div(bias1)
+            let v_for_update = v
+            if amsgrad:
+                let vh = vhs[i]
+                __copy_tensor(vh, __tensor_max(vh, v))
+                v_for_update = vh
+
+            let v_hat = v_for_update.div(bias2)
+            let update = m_hat.div(v_hat.sqrt().add(eps))
+            p.sub_(update.mul(lr))
+        i += 1
+    return opt
+
+fn __step_adamax(opt, params, grads, t: Int):
+    let lr = opt["lr"]
+    let b1 = opt["beta1"]
+    let b2 = opt["beta2"]
+    let eps = opt["eps"]
+    let weight_decay = opt["weight_decay"]
+    let maximize = opt["maximize"] == true
+
+    let st = __state(opt)
+    let ms = __ensure_zero_slots(st, "m", params)
+    let us = __ensure_zero_slots(st, "u", params)
+
+    let bias1 = 1.0 - (b1 ** t)
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+            if weight_decay != 0:
+                grad = grad.add(p.mul(weight_decay))
+
+            let m = ms[i]
+            let u = us[i]
+            __copy_tensor(m, m.mul(b1).add(grad.mul(1.0 - b1)))
+            __copy_tensor(u, __tensor_max(u.mul(b2), grad.abs()))
+
+            let m_hat = m.div(bias1)
+            let update = m_hat.div(u.add(eps))
+            p.sub_(update.mul(lr))
+        i += 1
+    return opt
+
+fn __step_nadam(opt, params, grads, t: Int):
+    let lr = opt["lr"]
+    let b1 = opt["beta1"]
+    let b2 = opt["beta2"]
+    let eps = opt["eps"]
+    let weight_decay = opt["weight_decay"]
+    let maximize = opt["maximize"] == true
+
+    let st = __state(opt)
+    let ms = __ensure_zero_slots(st, "m", params)
+    let vs = __ensure_zero_slots(st, "v", params)
+
+    let bias1 = 1.0 - (b1 ** t)
+    let bias2 = 1.0 - (b2 ** t)
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+            if weight_decay != 0:
+                grad = grad.add(p.mul(weight_decay))
+
+            let m = ms[i]
+            let v = vs[i]
+            __copy_tensor(m, m.mul(b1).add(grad.mul(1.0 - b1)))
+            __copy_tensor(v, v.mul(b2).add(grad.mul(grad).mul(1.0 - b2)))
+
+            let m_hat = m.div(bias1)
+            let nesterov = m_hat.mul(b1).add(grad.mul((1.0 - b1) / bias1))
+            let v_hat = v.div(bias2)
+            let update = nesterov.div(v_hat.sqrt().add(eps))
+            p.sub_(update.mul(lr))
+        i += 1
+    return opt
+
+fn __step_radam(opt, params, grads, t: Int):
+    let lr = opt["lr"]
+    let b1 = opt["beta1"]
+    let b2 = opt["beta2"]
+    let eps = opt["eps"]
+    let weight_decay = opt["weight_decay"]
+    let maximize = opt["maximize"] == true
+
+    let st = __state(opt)
+    let ms = __ensure_zero_slots(st, "m", params)
+    let vs = __ensure_zero_slots(st, "v", params)
+
+    let bias1 = 1.0 - (b1 ** t)
+    let bias2 = 1.0 - (b2 ** t)
+    let rho_inf = 2.0 / (1.0 - b2) - 1.0
+    let beta2_t = b2 ** t
+    let rho_t = rho_inf - (2.0 * t * beta2_t / (1.0 - beta2_t))
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+            if weight_decay != 0:
+                grad = grad.add(p.mul(weight_decay))
+
+            let m = ms[i]
+            let v = vs[i]
+            __copy_tensor(m, m.mul(b1).add(grad.mul(1.0 - b1)))
+            __copy_tensor(v, v.mul(b2).add(grad.mul(grad).mul(1.0 - b2)))
+
+            let m_hat = m.div(bias1)
+            let update = m_hat
+            if rho_t > 4.0:
+                let rect = (((rho_t - 4.0) * (rho_t - 2.0) * rho_inf) / ((rho_inf - 4.0) * (rho_inf - 2.0) * rho_t)) ** 0.5
+                let v_hat = v.div(bias2)
+                update = m_hat.mul(rect).div(v_hat.sqrt().add(eps))
+            p.sub_(update.mul(lr))
+        i += 1
+    return opt
+
+fn __step_rmsprop(opt, params, grads):
+    let lr = opt["lr"]
+    let alpha = opt["alpha"]
+    let eps = opt["eps"]
+    let weight_decay = opt["weight_decay"]
+    let momentum = opt["momentum"]
+    let centered = opt["centered"] == true
+    let maximize = opt["maximize"] == true
+
+    let st = __state(opt)
+    let sq = __ensure_zero_slots(st, "square_avg", params)
+    let bufs = __ensure_zero_slots(st, "momentum_buffer", params)
+    let ga = __ensure_zero_slots(st, "grad_avg", params)
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+            if weight_decay != 0:
+                grad = grad.add(p.mul(weight_decay))
+
+            let sq_i = sq[i]
+            __copy_tensor(sq_i, sq_i.mul(alpha).add(grad.mul(grad).mul(1.0 - alpha)))
+
+            let avg = sq_i
+            if centered:
+                let ga_i = ga[i]
+                __copy_tensor(ga_i, ga_i.mul(alpha).add(grad.mul(1.0 - alpha)))
+                avg = sq_i.sub(ga_i.mul(ga_i)).clip(eps, BIG)
+
+            let denom = avg.sqrt().add(eps)
+            if momentum > 0:
+                let b = bufs[i]
+                __copy_tensor(b, b.mul(momentum).add(grad.div(denom)))
+                p.sub_(b.mul(lr))
+            else:
+                p.sub_(grad.div(denom).mul(lr))
+        i += 1
+    return opt
+
+fn __step_adagrad(opt, params, grads, t: Int):
+    let lr0 = opt["lr"]
+    let lr_decay = opt["lr_decay"]
+    let weight_decay = opt["weight_decay"]
+    let eps = opt["eps"]
+    let maximize = opt["maximize"] == true
+
+    let clr = lr0 / (1.0 + (t - 1) * lr_decay)
+
+    let st = __state(opt)
+    let sum_sq = __ensure_zero_slots(st, "sum_sq", params)
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+            if weight_decay != 0:
+                grad = grad.add(p.mul(weight_decay))
+
+            let s = sum_sq[i]
+            __copy_tensor(s, s.add(grad.mul(grad)))
+            let update = grad.div(s.sqrt().add(eps))
+            p.sub_(update.mul(clr))
+        i += 1
+    return opt
+
+fn __step_adadelta(opt, params, grads):
+    let lr = opt["lr"]
+    let rho = opt["rho"]
+    let eps = opt["eps"]
+    let weight_decay = opt["weight_decay"]
+    let maximize = opt["maximize"] == true
+
+    let st = __state(opt)
+    let sq = __ensure_zero_slots(st, "square_avg", params)
+    let acc = __ensure_zero_slots(st, "acc_delta", params)
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+            if weight_decay != 0:
+                grad = grad.add(p.mul(weight_decay))
+
+            let sq_i = sq[i]
+            let acc_i = acc[i]
+            __copy_tensor(sq_i, sq_i.mul(rho).add(grad.mul(grad).mul(1.0 - rho)))
+
+            let rms_delta = acc_i.add(eps).sqrt()
+            let rms_grad = sq_i.add(eps).sqrt()
+            let delta = rms_delta.div(rms_grad).mul(grad)
+
+            p.sub_(delta.mul(lr))
+            __copy_tensor(acc_i, acc_i.mul(rho).add(delta.mul(delta).mul(1.0 - rho)))
+        i += 1
+    return opt
+
+fn __step_lion(opt, params, grads):
+    let lr = opt["lr"]
+    let b1 = opt["beta1"]
+    let b2 = opt["beta2"]
+    let weight_decay = opt["weight_decay"]
+    let maximize = opt["maximize"] == true
+
+    let st = __state(opt)
+    let ms = __ensure_zero_slots(st, "m", params)
+
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            var grad = g
+            if maximize:
+                grad = grad.mul(-1.0)
+
+            if weight_decay != 0:
+                p.mul_(1.0 - lr * weight_decay)
+
+            let m = ms[i]
+            let update = __tensor_sign(m.mul(b1).add(grad.mul(1.0 - b1)))
+            p.sub_(update.mul(lr))
+            __copy_tensor(m, m.mul(b2).add(grad.mul(1.0 - b2)))
+        i += 1
+    return opt
+
+fn __step_lookahead(opt, params, grads, t: Int, clip_norm, clip_value, grad_scale):
+    let inner = opt["inner"]
+    step(inner, params, grads, clip_norm, clip_value, grad_scale)
+
+    let st = __state(opt)
+    let slow = __ensure_clone_slots(st, "slow", params)
+    let k = opt["k"]
+    let alpha = opt["alpha"]
+
+    if t % k == 0:
+        var i = 0
+        while i < len(params):
+            let p = params[i]
+            let s = slow[i]
+            let moved = p.sub(s).mul(alpha)
+            s.add_(moved)
+            __copy_tensor(p, s)
+            i += 1
+    return opt
+
+fn __state(opt):
+    if opt["state"] == nil:
+        opt["state"] = {}
+    return opt["state"]
+
+fn __next_step(opt):
+    if opt["step"] == nil:
+        opt["step"] = 0
+    opt["step"] = int(opt["step"]) + 1
+    return opt["step"]
+
+fn __prepare_grads(grads, grad_scale: Float64, clip_value, clip_norm):
+    if grad_scale == 0:
+        panic("optim.step grad_scale must be non-zero")
+
+    let out = []
+    var i = 0
+    while i < len(grads):
+        let g = grads[i]
+        if g == nil:
+            out.push(nil)
+        else:
+            let gg = g.clone()
+            if grad_scale != 1:
+                gg = gg.div(grad_scale)
+            if clip_value != nil:
+                let v = abs(float(clip_value))
+                gg = gg.clip(-v, v)
+            out.push(gg)
+        i += 1
+
+    if clip_norm != nil:
+        let max_norm = abs(float(clip_norm))
+        if max_norm > 0:
+            let total = global_grad_norm(out)
+            if total > max_norm:
+                let scale = max_norm / (total + EPS)
+                i = 0
+                while i < len(out):
+                    if out[i] != nil:
+                        out[i] = out[i].mul(scale)
+                    i += 1
+
+    return out
+
+fn __ensure_zero_slots(state, key: String, params):
+    if state[key] == nil:
+        let slots = []
+        for p in params:
+            slots.push(tensor.zeros_like(p))
+        state[key] = slots
+    let out = state[key]
+    if len(out) != len(params):
+        panic("optimizer state slot '{key}' has wrong size")
+    return out
+
+fn __ensure_clone_slots(state, key: String, params):
+    if state[key] == nil:
+        let slots = []
+        for p in params:
+            slots.push(p.clone())
+        state[key] = slots
+    let out = state[key]
+    if len(out) != len(params):
+        panic("optimizer state slot '{key}' has wrong size")
+    return out
+
+fn __copy_tensor(dst, src):
+    dst.mul_(0.0)
+    dst.add_(src)
+    return dst
+
+fn __tensor_max(a, b):
+    return tensor.zip_map(a, b, fn(x, y, idx):
+        if x >= y:
+            return x
+        return y
+    )
+
+fn __tensor_sign(t):
+    return t.map(fn(v, idx):
+        if v > 0:
+            return 1.0
+        if v < 0:
+            return -1.0
+        return 0.0
+    )
+
+fn __same_shape(a, b):
+    if len(a) != len(b):
+        return false
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            return false
+        i += 1
+    return true
+
+fn __validate_params_grads(params, grads):
+    if len(params) != len(grads):
+        panic("optim.step expects params and grads lists with same length")
+    var i = 0
+    while i < len(params):
+        let p = params[i]
+        let g = grads[i]
+        if g != nil:
+            if not __same_shape(p.shape(), g.shape()):
+                panic("optim.step gradient shape mismatch at index {i}")
+        i += 1
+
+fn __require_positive(value: Float64, label: String):
+    if value <= 0:
+        panic("{label} must be > 0")
+
+fn __validated_lr(value: Float64, label: String):
+    __require_positive(value, "{label} lr")
+    return value
+
+fn __validated_non_negative(value: Float64, label: String):
+    if value < 0:
+        panic("{label} must be >= 0")
+    return value
+
+fn __validated_beta(value: Float64, label: String):
+    if value < 0 or value >= 1:
+        panic("{label} must be in [0, 1)")
+    return value
+
+fn __validated_eps(value: Float64, label: String):
+    if value <= 0:
+        panic("{label} must be > 0")
+    return value

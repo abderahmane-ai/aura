@@ -1,0 +1,303 @@
+module std.ml.logistic
+
+import std.tensor as tensor
+import std.optim as optim
+import std.math as math
+
+let EPS = 0.000000000001
+
+fn init(input_dim: Int, num_classes: Int = 1):
+    if input_dim <= 0:
+        panic("logistic.init expects input_dim > 0")
+
+    if num_classes <= 1:
+        return {
+            "kind": "binary",
+            "input_dim": input_dim,
+            "num_classes": 1,
+            "W": tensor.zeros([input_dim]),
+            "b": tensor.zeros([1])
+        }
+
+    return {
+        "kind": "multiclass",
+        "input_dim": input_dim,
+        "num_classes": num_classes,
+        "W": tensor.zeros([input_dim, num_classes]),
+        "b": tensor.zeros([num_classes])
+    }
+
+fn clone_model(model):
+    return {
+        "kind": model["kind"],
+        "input_dim": model["input_dim"],
+        "num_classes": model["num_classes"],
+        "W": model["W"].clone(),
+        "b": model["b"].clone()
+    }
+
+fn logits(model, X):
+    let x = tensor.tensor(X)
+    __validate_input_shape(model, x)
+    return x.matmul(model["W"]).add(model["b"])
+
+fn predict_proba(model, X):
+    let z = logits(model, X)
+    if model["num_classes"] == 1:
+        return z.sigmoid()
+    return z.softmax(1)
+
+fn predict(model, X, threshold: Float64 = 0.5):
+    let p = predict_proba(model, X)
+    if model["num_classes"] == 1:
+        return p.map(fn(v, idx):
+            if v >= threshold:
+                return 1.0
+            return 0.0
+        )
+
+    let rows = p.to_list()
+    let out = []
+    var i = 0
+    while i < len(rows):
+        out.push(__argmax_row(rows[i]))
+        i += 1
+    return tensor.tensor(out)
+
+fn loss(model, X, y, l2: Float64 = 0.0):
+    let x = tensor.tensor(X)
+    let t = tensor.tensor(y)
+    __validate_dataset_for_model(model, x, t)
+
+    let p = predict_proba(model, x)
+    var base = 0.0
+    if model["num_classes"] == 1:
+        let target = __binary_targets(t, x.shape()[0])
+        base = tensor.bce_loss(p, target, EPS)
+    else:
+        let target = __multiclass_targets(t, x.shape()[0], model["num_classes"])
+        base = tensor.cross_entropy_loss(p, target, EPS)
+    return base + __l2_penalty(model["W"], l2)
+
+fn evaluate(model, X, y, l2: Float64 = 0.0):
+    let x = tensor.tensor(X)
+    let t = tensor.tensor(y)
+    __validate_dataset_for_model(model, x, t)
+
+    let p = predict_proba(model, x)
+    var acc = 0.0
+    var base = 0.0
+
+    if model["num_classes"] == 1:
+        let target = __binary_targets(t, x.shape()[0])
+        acc = tensor.binary_accuracy(p, target, 0.5)
+        base = tensor.bce_loss(p, target, EPS)
+    else:
+        let target = __multiclass_targets(t, x.shape()[0], model["num_classes"])
+        acc = tensor.classification_accuracy(p, target)
+        base = tensor.cross_entropy_loss(p, target, EPS)
+
+    return {
+        "loss": base + __l2_penalty(model["W"], l2),
+        "accuracy": acc
+    }
+
+fn fit(model, X, y, options = {}):
+    let x = tensor.tensor(X)
+    let t = tensor.tensor(y)
+    __validate_dataset_for_model(model, x, t)
+
+    let n = x.shape()[0]
+    var epochs = int(__opt(options, "epochs", 200))
+    if epochs <= 0:
+        panic("logistic.fit expects epochs > 0")
+
+    var batch_size = int(__opt(options, "batch_size", 0))
+    if batch_size <= 0 or batch_size > n:
+        batch_size = n
+
+    let shuffle = __opt(options, "shuffle", true) == true
+    let l2 = float(__opt(options, "l2", 0.0))
+    let verbose = __opt(options, "verbose", false) == true
+    var log_every = int(__opt(options, "log_every", 10))
+    if log_every <= 0:
+        log_every = 1
+
+    let clip_norm = __opt(options, "clip_norm", nil)
+    let clip_value = __opt(options, "clip_value", nil)
+    let grad_scale = float(__opt(options, "grad_scale", 1.0))
+
+    var seed = int(__opt(options, "seed", 42))
+    var opt = __opt(options, "optimizer", nil)
+    let lr_opt = __opt(options, "lr", nil)
+    if opt == nil:
+        var init_lr = 0.1
+        if lr_opt != nil:
+            init_lr = float(lr_opt)
+        opt = optim.sgd(init_lr)
+    elif lr_opt != nil:
+        optim.set_lr(opt, float(lr_opt))
+
+    let x_rows = x.to_list()
+    let y_rows = t.to_list()
+    let y_rank = t.rank()
+
+    let history = {"loss": [], "accuracy": []}
+
+    var epoch = 0
+    while epoch < epochs:
+        let indices = __indices(n, shuffle, seed + epoch)
+
+        var start = 0
+        while start < n:
+            let stop = min(n, start + batch_size)
+            let batch = __select_batch(x_rows, y_rows, y_rank, indices, start, stop)
+            let grads = __gradients(model, batch["X"], batch["y"], l2)
+            optim.step(opt, [model["W"], model["b"]], [grads["dW"], grads["db"]], clip_norm, clip_value, grad_scale)
+            start = stop
+
+        let stats = evaluate(model, x, t, l2)
+        history["loss"].push(stats["loss"])
+        history["accuracy"].push(stats["accuracy"])
+
+        if verbose and ((epoch + 1) % log_every == 0 or epoch == 0 or epoch + 1 == epochs):
+            let train_loss = stats["loss"]
+            let train_acc = stats["accuracy"]
+            print("epoch {epoch + 1}/{epochs} loss={train_loss} acc={train_acc}")
+
+        epoch += 1
+
+    return {
+        "model": model,
+        "optimizer": opt,
+        "history": history
+    }
+
+fn __gradients(model, x_batch, y_batch, l2: Float64):
+    let x = tensor.tensor(x_batch)
+    let t = tensor.tensor(y_batch)
+    __validate_dataset_for_model(model, x, t)
+
+    let n = x.shape()[0]
+    let w = model["W"]
+    let b = model["b"]
+
+    if model["num_classes"] == 1:
+        let p = x.matmul(w).add(b).sigmoid()
+        let yv = __binary_targets(t, n)
+        let err = p.sub(yv)
+
+        let dW = x.transpose().matmul(err).div(n)
+        if l2 != 0:
+            dW.add_(w.mul(l2))
+
+        let db = tensor.tensor([err.mean()])
+        return {"dW": dW, "db": db}
+
+    let p = x.matmul(w).add(b).softmax(1)
+    let yoh = __multiclass_targets(t, n, model["num_classes"])
+    let err = p.sub(yoh)
+
+    let dW = x.transpose().matmul(err).div(n)
+    if l2 != 0:
+        dW.add_(w.mul(l2))
+
+    let db = err.mean_axis(0)
+    return {"dW": dW, "db": db}
+
+fn __indices(n: Int, do_shuffle: Bool, seed: Int):
+    let idx = []
+    var i = 0
+    while i < n:
+        idx.push(i)
+        i += 1
+
+    if not do_shuffle:
+        return idx
+
+    let rng = math.rng(seed)
+    return math.shuffle(rng, idx)
+
+fn __select_batch(x_rows, y_rows, y_rank: Int, idx, start: Int, stop: Int):
+    let xb = []
+    let yb = []
+
+    var i = start
+    while i < stop:
+        let k = idx[i]
+        xb.push(x_rows[k])
+        yb.push(y_rows[k])
+        i += 1
+
+    if y_rank == 1:
+        return {"X": tensor.tensor(xb), "y": tensor.tensor(yb)}
+    return {"X": tensor.tensor(xb), "y": tensor.tensor(yb)}
+
+fn __binary_targets(t, n: Int):
+    if t.rank() == 1:
+        if t.shape()[0] != n:
+            panic("binary targets length mismatch")
+        return t
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        return t.flatten()
+    panic("binary targets must be rank-1 [n] or rank-2 [n,1]")
+
+fn __multiclass_targets(t, n: Int, num_classes: Int):
+    if t.rank() == 1:
+        if t.shape()[0] != n:
+            panic("multiclass target length mismatch")
+        return tensor.one_hot(t.to_flat_list(), num_classes)
+
+    if t.rank() == 2:
+        if t.shape()[0] != n or t.shape()[1] != num_classes:
+            panic("multiclass one-hot target shape mismatch")
+        return t
+
+    panic("multiclass targets must be rank-1 labels or rank-2 one-hot")
+
+fn __validate_input_shape(model, x):
+    if x.rank() != 2:
+        panic("logistic expects input rank-2 [n, d]")
+    if x.shape()[1] != model["input_dim"]:
+        panic("logistic input_dim mismatch")
+
+fn __validate_dataset_for_model(model, x, t):
+    __validate_input_shape(model, x)
+    let n = x.shape()[0]
+
+    if model["num_classes"] == 1:
+        if t.rank() == 1 and t.shape()[0] == n:
+            return
+        if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+            return
+        panic("binary logistic expects target shape [n] or [n,1]")
+
+    if t.rank() == 1 and t.shape()[0] == n:
+        return
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == model["num_classes"]:
+        return
+    panic("multiclass logistic expects target shape [n] or [n,num_classes]")
+
+fn __l2_penalty(w, l2: Float64):
+    if l2 == 0:
+        return 0.0
+    return 0.5 * l2 * w.mul(w).mean()
+
+fn __argmax_row(row):
+    var best_i = 0
+    var best_v = row[0]
+    var i = 1
+    while i < len(row):
+        if row[i] > best_v:
+            best_v = row[i]
+            best_i = i
+        i += 1
+    return best_i
+
+fn __opt(options, key: String, fallback):
+    if options == nil:
+        return fallback
+    let value = options[key]
+    if value == nil:
+        return fallback
+    return value

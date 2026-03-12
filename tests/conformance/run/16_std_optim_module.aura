@@ -1,0 +1,20 @@
+import std.optim as optim
+import std.tensor as tensor
+import std.io as io
+
+fn main():
+    let p = tensor.tensor([1.0, -1.0])
+    let g = tensor.tensor([0.5, -0.5])
+
+    let opt = optim.adamw(0.1)
+    optim.step(opt, [p], [g], 1.0, nil, 1.0)
+
+    let v = p.to_list()
+    if v[0] >= 1.0 or v[1] <= -1.0:
+        panic("optimizer step did not move params")
+
+    let lr = optim.lr_warmup_cosine(0.1, 5, 10, 100, 0.001)
+    if lr <= 0 or lr > 0.1:
+        panic("lr schedule output out of range")
+
+    io.println("std.optim ok")

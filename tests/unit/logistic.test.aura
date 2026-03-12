@@ -1,0 +1,40 @@
+import std.test as test
+import std.tensor as tensor
+import std.optim as optim
+import std.data.synthetic as synthetic
+import std.ml.logistic as logistic
+
+fn main():
+    let data = synthetic.binary_linear(320, 4, 0.12, 7)
+    let split = synthetic.train_test_split(data["X"], data["y"], 0.25, true, 9)
+
+    let model = logistic.init(4, 1)
+    let opts_bin = {"epochs": 120, "lr": 0.2, "batch_size": 32, "l2": 0.001, "seed": 11}
+    let fit_bin = logistic.fit(model, split["X_train"], split["y_train"], opts_bin)
+
+    let hist_loss = fit_bin["history"]["loss"]
+    test.assert_true(hist_loss[0] > hist_loss[len(hist_loss) - 1])
+
+    let m1 = logistic.evaluate(model, split["X_test"], split["y_test"])
+    test.assert_true(m1["accuracy"] > 0.88)
+
+    let preds = logistic.predict(model, split["X_test"])
+    test.assert_equal(preds.shape()[0], split["X_test"].shape()[0])
+
+    let data_mc = synthetic.multiclass_blobs(3, 80, 2, 0.45, 3.2, 21)
+    let split_mc = synthetic.train_test_split(data_mc["X"], data_mc["y"], 0.2, true, 5)
+
+    let model_mc = logistic.init(2, 3)
+    let opt = optim.adam(0.08)
+    let opts_mc = {"epochs": 140, "optimizer": opt, "batch_size": 48, "seed": 15}
+    let fit_mc = logistic.fit(model_mc, split_mc["X_train"], split_mc["y_train"], opts_mc)
+
+    let mc_loss = fit_mc["history"]["loss"]
+    test.assert_true(mc_loss[0] > mc_loss[len(mc_loss) - 1])
+
+    let m2 = logistic.evaluate(model_mc, split_mc["X_test"], split_mc["y_test"])
+    test.assert_true(m2["accuracy"] > 0.85)
+
+    let y_one_hot = tensor.one_hot(split_mc["y_train"].to_flat_list(), 3)
+    let loss_oh = logistic.loss(model_mc, split_mc["X_train"], y_one_hot)
+    test.assert_true(loss_oh > 0)

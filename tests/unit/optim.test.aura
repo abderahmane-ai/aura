@@ -1,0 +1,63 @@
+import std.test as test
+import std.tensor as tensor
+import std.optim as optim
+
+fn __assert_moves_towards_zero(opt):
+    let p = tensor.tensor([1.0, -1.0])
+    let g = tensor.tensor([0.5, -0.5])
+    optim.step(opt, [p], [g])
+    let out = p.to_list()
+    test.assert_true(out[0] < 1.0)
+    test.assert_true(out[1] > -1.0)
+
+fn main():
+    __assert_moves_towards_zero(optim.sgd(0.1))
+    __assert_moves_towards_zero(optim.sgd(0.1, 0.9, 0.0, true))
+    __assert_moves_towards_zero(optim.adam(0.1))
+    __assert_moves_towards_zero(optim.adamax(0.1))
+    __assert_moves_towards_zero(optim.nadam(0.1))
+    __assert_moves_towards_zero(optim.radam(0.1))
+    __assert_moves_towards_zero(optim.rmsprop(0.1))
+    __assert_moves_towards_zero(optim.adagrad(0.1))
+    __assert_moves_towards_zero(optim.adadelta(1.0))
+    __assert_moves_towards_zero(optim.lion(0.01))
+
+    let p_decay = tensor.tensor([1.0])
+    let g_zero = tensor.tensor([0.0])
+    let adamw = optim.adamw(0.1, 0.9, 0.999, 0.00000001, 0.1)
+    optim.step(adamw, [p_decay], [g_zero])
+    test.assert_approx(p_decay.to_list()[0], 0.99, 0.000001)
+
+    let p_clip = tensor.tensor([1.0])
+    let g_clip = tensor.tensor([10.0])
+    let opt_clip = optim.sgd(1.0)
+    optim.step(opt_clip, [p_clip], [g_clip], nil, 0.1, 1.0)
+    test.assert_approx(p_clip.to_list()[0], 0.9, 0.000001)
+
+    let p_scale = tensor.tensor([1.0])
+    let g_scale = tensor.tensor([1.0])
+    let opt_scale = optim.sgd(1.0)
+    optim.step(opt_scale, [p_scale], [g_scale], nil, nil, 10.0)
+    test.assert_approx(p_scale.to_list()[0], 0.9, 0.000001)
+
+    let gn = tensor.tensor([3.0, 4.0])
+    test.assert_approx(optim.global_grad_norm([gn]), 5.0, 0.000001)
+    let before = optim.clip_grad_norm_([gn], 1.0)
+    test.assert_approx(before, 5.0, 0.000001)
+    test.assert_true(optim.global_grad_norm([gn]) <= 1.000001)
+
+    let inner = optim.sgd(0.1)
+    let look = optim.lookahead(inner, 2, 0.5)
+    let p_look = tensor.tensor([1.0])
+    let g_look = tensor.tensor([1.0])
+    optim.step(look, [p_look], [g_look])
+    optim.step(look, [p_look], [g_look])
+    test.assert_approx(p_look.to_list()[0], 0.85, 0.000001)
+
+    test.assert_approx(optim.lr_constant(0.1, 50), 0.1, 0.000001)
+    test.assert_approx(optim.lr_step(0.1, 9, 10, 0.5), 0.1, 0.000001)
+    test.assert_approx(optim.lr_step(0.1, 10, 10, 0.5), 0.05, 0.000001)
+    test.assert_approx(optim.lr_exponential(0.1, 2, 0.5), 0.025, 0.000001)
+    test.assert_approx(optim.lr_linear_warmup(0.1, 5, 10), 0.05, 0.000001)
+    test.assert_approx(optim.lr_cosine(0.1, 0, 100, 0.0), 0.1, 0.000001)
+    test.assert_approx(optim.lr_cosine(0.1, 100, 100, 0.0), 0.0, 0.000001)

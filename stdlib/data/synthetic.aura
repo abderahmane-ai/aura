@@ -1,0 +1,155 @@
+module std.data.synthetic
+
+import std.math as math
+import std.tensor as tensor
+
+fn binary_linear(n: Int = 200, input_dim: Int = 2, noise: Float64 = 0.2, seed: Int = 42):
+    if n <= 0:
+        panic("synthetic.binary_linear expects n > 0")
+    if input_dim <= 0:
+        panic("synthetic.binary_linear expects input_dim > 0")
+    if noise < 0:
+        panic("synthetic.binary_linear expects noise >= 0")
+
+    let rng = math.rng(seed)
+    let true_w = []
+    var j = 0
+    while j < input_dim:
+        true_w.push(math.rand(rng, -2.0, 2.0))
+        j += 1
+    let true_b = math.rand(rng, -0.5, 0.5)
+
+    let rows = []
+    let labels = []
+
+    var i = 0
+    while i < n:
+        let row = []
+        j = 0
+        while j < input_dim:
+            row.push(math.rand(rng, -2.0, 2.0))
+            j += 1
+
+        var score = true_b
+        j = 0
+        while j < input_dim:
+            score += row[j] * true_w[j]
+            j += 1
+        score += math.rand(rng, -noise, noise)
+
+        var y = 0
+        if score >= 0:
+            y = 1
+
+        rows.push(row)
+        labels.push(y)
+        i += 1
+
+    return {"X": tensor.tensor(rows), "y": tensor.tensor(labels), "weights": tensor.tensor(true_w), "bias": true_b}
+
+fn multiclass_blobs(num_classes: Int = 3, n_per_class: Int = 100, input_dim: Int = 2, spread: Float64 = 0.5, radius: Float64 = 3.0, seed: Int = 42):
+    if num_classes <= 1:
+        panic("synthetic.multiclass_blobs expects num_classes > 1")
+    if n_per_class <= 0:
+        panic("synthetic.multiclass_blobs expects n_per_class > 0")
+    if input_dim <= 0:
+        panic("synthetic.multiclass_blobs expects input_dim > 0")
+    if spread < 0:
+        panic("synthetic.multiclass_blobs expects spread >= 0")
+    if radius <= 0:
+        panic("synthetic.multiclass_blobs expects radius > 0")
+
+    let rng = math.rng(seed)
+    let centers = []
+
+    var c = 0
+    while c < num_classes:
+        let center = []
+        let angle = 2.0 * math.PI * c / num_classes
+        var j = 0
+        while j < input_dim:
+            var base = 0.0
+            if j == 0:
+                base = radius * math.cos(angle)
+            elif j == 1:
+                base = radius * math.sin(angle)
+            else:
+                base = math.rand(rng, -radius, radius)
+            center.push(base)
+            j += 1
+        centers.push(center)
+        c += 1
+
+    let rows = []
+    let labels = []
+
+    c = 0
+    while c < num_classes:
+        let center = centers[c]
+        var i = 0
+        while i < n_per_class:
+            let row = []
+            var j = 0
+            while j < input_dim:
+                row.push(center[j] + math.rand(rng, -spread, spread))
+                j += 1
+            rows.push(row)
+            labels.push(c)
+            i += 1
+        c += 1
+
+    return {"X": tensor.tensor(rows), "y": tensor.tensor(labels), "centers": tensor.tensor(centers)}
+
+fn train_test_split(X, y, test_ratio: Float64 = 0.2, shuffle: Bool = true, seed: Int = 42):
+    if test_ratio <= 0 or test_ratio >= 1:
+        panic("synthetic.train_test_split expects 0 < test_ratio < 1")
+
+    let x = tensor.tensor(X)
+    let t = tensor.tensor(y)
+    if x.rank() != 2:
+        panic("synthetic.train_test_split expects X rank-2 [n, d]")
+
+    let n = x.shape()[0]
+    if n <= 1:
+        panic("synthetic.train_test_split expects at least 2 rows")
+
+    if t.shape()[0] != n:
+        panic("synthetic.train_test_split expects matching row count for X and y")
+
+    var idx = []
+    var i = 0
+    while i < n:
+        idx.push(i)
+        i += 1
+
+    if shuffle:
+        let rng = math.rng(seed)
+        idx = math.shuffle(rng, idx)
+
+    var n_test = int(n * test_ratio)
+    if n_test <= 0:
+        n_test = 1
+    if n_test >= n:
+        n_test = n - 1
+
+    let split = n - n_test
+    let x_rows = x.to_list()
+    let y_rows = t.to_list()
+
+    let x_train = []
+    let y_train = []
+    let x_test = []
+    let y_test = []
+
+    i = 0
+    while i < n:
+        let k = idx[i]
+        if i < split:
+            x_train.push(x_rows[k])
+            y_train.push(y_rows[k])
+        else:
+            x_test.push(x_rows[k])
+            y_test.push(y_rows[k])
+        i += 1
+
+    return {"X_train": tensor.tensor(x_train), "y_train": tensor.tensor(y_train), "X_test": tensor.tensor(x_test), "y_test": tensor.tensor(y_test)}
