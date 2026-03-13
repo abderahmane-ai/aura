@@ -1,0 +1,33 @@
+import std.test as test
+import std.data.synthetic as synthetic
+import std.tensor as tensor
+import std.ml.tree as tree
+
+fn main():
+    let data = synthetic.multiclass_blobs(3, 80, 2, 0.35, 3.0, 12)
+    let split = synthetic.train_test_split(data["X"], data["y"], 0.25, true, 7)
+
+    let model = tree.model("classification", 6, 2, 1, nil, 5)
+    model.fit(split["X_train"], split["y_train"])
+    let metrics = model.evaluate(split["X_test"], split["y_test"])
+    test.assert_true(metrics["accuracy"] > 0.8)
+
+    let proba = model.predict_proba(split["X_test"])
+    test.assert_equal(proba.shape()[1], 3)
+
+    let X = []
+    let y = []
+    var i = 0
+    while i < 60:
+        let v = float(i) / 10.0 - 3.0
+        X.push([v])
+        if v < 0:
+            y.push(1.0)
+        else:
+            y.push(2.0)
+        i += 1
+    let reg = tree.model("regression", 3, 2, 1)
+    reg.fit(tensor.tensor(X), tensor.tensor(y))
+    let preds = reg.predict(tensor.tensor(X))
+    let mse = preds.mse_loss(tensor.tensor(y))
+    test.assert_true(mse < 0.05)

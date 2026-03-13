@@ -1,0 +1,134 @@
+import std.data.csv as csv
+import std.data.table as table
+import std.ml.preprocess as preprocess
+import std.ml.tree as tree
+import std.ml.forest as forest
+import std.ml.naive_bayes as naive_bayes
+import std.ml.logistic as logistic
+import std.ml.svm as svm
+import std.ml.knn as knn
+import std.math as math
+import std.io as io
+import std.fs as fs
+
+fn load_wdbc(path: String):
+    let tbl = csv.read(path, {"header": false})
+    let tbl2 = tbl.drop_cols(["col_0"])
+    let diag = tbl2.column("col_1")
+    let labels = []
+    for v in diag:
+        if v == "M":
+            labels.push(1)
+        else:
+            labels.push(0)
+    tbl2 = tbl2.with_column("label", labels)
+    tbl2 = tbl2.drop_cols(["col_1"])
+    return tbl2
+
+fn resolve_dataset_path():
+    let cwd = fs.cwd()
+    let direct = fs.join([cwd, "data", "wdbc.data"])
+    if fs.exists(direct):
+        return direct
+    let parent = fs.dirname(cwd)
+    let parent_path = fs.join([parent, "data", "wdbc.data"])
+    if fs.exists(parent_path):
+        return parent_path
+    panic("wdbc.data not found; expected data/wdbc.data")
+
+fn feature_cols(tbl):
+    let cols = []
+    for name in tbl.columns:
+        if name != "label":
+            cols.push(name)
+    return cols
+
+fn train_test_split_table(tbl, test_ratio: Float64 = 0.2, shuffle: Bool = true, seed: Int = 42):
+    if test_ratio <= 0 or test_ratio >= 1:
+        panic("split expects 0 < test_ratio < 1")
+    let n = len(tbl.rows)
+    if n < 2:
+        panic("split expects at least 2 rows")
+    let idx = []
+    var i = 0
+    while i < n:
+        idx.push(i)
+        i += 1
+    if shuffle:
+        let rng = math.rng(seed)
+        i = n - 1
+        while i > 0:
+            let j = math.rand_int(rng, 0, i)
+            let tmp = idx[i]
+            idx[i] = idx[j]
+            idx[j] = tmp
+            i -= 1
+    let test_n = int(math.floor(float(n) * test_ratio))
+    if test_n <= 0:
+        test_n = 1
+    let train_n = n - test_n
+    let train_rows = []
+    let test_rows = []
+    i = 0
+    while i < n:
+        let row = to_list(tbl.rows[idx[i]])
+        if i < train_n:
+            train_rows.push(row)
+        else:
+            test_rows.push(row)
+        i += 1
+    return {"train": table.table(tbl.columns, train_rows, tbl.types, tbl.meta), "test": table.table(tbl.columns, test_rows, tbl.types, tbl.meta)}
+
+fn print_metrics(name: String, stats):
+    let acc = stats["accuracy"]
+    let prec = stats["precision"]
+    let rec = stats["recall"]
+    let f1 = stats["f1"]
+    io.println("{name} | acc={acc} precision={prec} recall={rec} f1={f1}")
+
+fn main():
+    let path = resolve_dataset_path()
+    let tbl = load_wdbc(path)
+    let split = train_test_split_table(tbl, 0.2, true, 42)
+    let feat_cols = feature_cols(split["train"])
+
+    let scaler = preprocess.standard_scaler(feat_cols)
+    scaler.fit(split["train"])
+    let train_tbl = scaler.transform(split["train"])
+    let test_tbl = scaler.transform(split["test"])
+
+    let train = train_tbl.to_tensors(feat_cols, "label")
+    let test = test_tbl.to_tensors(feat_cols, "label")
+
+    let X_train = train["X"]
+    let y_train = train["y"]
+    let X_test = test["X"]
+    let y_test = test["y"]
+
+    io.println("Breast Cancer Wisconsin (Diagnostic) comparison")
+    io.println("train={X_train.shape()[0]} test={X_test.shape()[0]} features={X_train.shape()[1]}")
+    io.println("")
+
+    let log = logistic.model(X_train.shape()[1], 1)
+    log.fit(X_train, y_train, {"epochs": 300, "lr": 0.1, "batch_size": 32, "seed": 42})
+    print_metrics("logistic", log.evaluate(X_test, y_test))
+
+    let svm_model = svm.model(X_train.shape()[1], 1)
+    svm_model.fit(X_train, y_train, {"epochs": 300, "lr": 0.05, "batch_size": 32, "seed": 42})
+    print_metrics("svm", svm_model.evaluate(X_test, y_test))
+
+    let knn_model = knn.model(7, "classification", "distance")
+    knn_model.fit(X_train, y_train)
+    print_metrics("knn", knn_model.evaluate(X_test, y_test))
+
+    let tree_model = tree.model("classification", 3, 2, 1, 0.3, 42)
+    tree_model.fit(X_train, y_train)
+    print_metrics("tree", tree_model.evaluate(X_test, y_test))
+
+    let nb_model = naive_bayes.model("gaussian", 1.0, 0.000000001)
+    nb_model.fit(X_train, y_train)
+    print_metrics("naive_bayes", nb_model.evaluate(X_test, y_test))
+
+    let forest_model = forest.model("classification", 3, 2, 2, 1, 0.3, true, 42)
+    forest_model.fit(X_train, y_train)
+    print_metrics("forest", forest_model.evaluate(X_test, y_test))

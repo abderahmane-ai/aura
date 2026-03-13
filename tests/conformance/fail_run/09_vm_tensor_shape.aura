@@ -1,0 +1,6 @@
+import std.tensor as tensor
+
+fn main():
+    let a = tensor.tensor([[1, 2], [3, 4]])
+    let b = tensor.tensor([[1, 2, 3]])
+    a.matmul(b)

@@ -149,9 +149,24 @@ export class VM {
                     case 'SUB': { const b = this.pop(), a = this.pop(); this.push(this.sub(a, b)); break; }
                     case 'MUL': { const b = this.pop(), a = this.pop(); this.push(this.mul(a, b)); break; }
                     case 'DIV': { const b = this.pop(), a = this.pop(); this.push(this.div(a, b)); break; }
-                    case 'MOD': { const b = this.pop(), a = this.pop(); this.push((a as number) % (b as number)); break; }
-                    case 'POW': { const b = this.pop(), a = this.pop(); this.push(Math.pow(a as number, b as number)); break; }
-                    case 'NEG': { const a = this.pop(); this.push(-(a as number)); break; }
+                    case 'MOD': {
+                        const b = this.expectNumber(this.pop(), 'mod');
+                        const a = this.expectNumber(this.pop(), 'mod');
+                        if (b === 0) runtimeError('vm.mod: division by zero');
+                        this.push(a % b);
+                        break;
+                    }
+                    case 'POW': {
+                        const b = this.expectNumber(this.pop(), 'pow');
+                        const a = this.expectNumber(this.pop(), 'pow');
+                        this.push(Math.pow(a, b));
+                        break;
+                    }
+                    case 'NEG': {
+                        const a = this.expectNumber(this.pop(), 'neg');
+                        this.push(-a);
+                        break;
+                    }
                     case 'CONCAT': { const b = this.pop(), a = this.pop(); this.push(String(a) + String(b)); break; }
 
                 case 'EQ': { const b = this.pop(), a = this.pop(); this.push(this.equal(a, b)); break; }
@@ -170,33 +185,43 @@ export class VM {
 
                 case 'BUILD_LIST': {
                     const n = instr.arg as number;
-                    const items = this.stack.splice(this.stack.length - n, n);
+                    const start = this.stack.length - n;
+                    const items = this.stack.slice(start);
+                    this.stack.length = start;
                     this.push({ type: 'list', items } as AuraList);
                     break;
                 }
                 case 'BUILD_MAP': {
                     const n = instr.arg as number;
                     const entries = new Map<string, Value>();
-                    const pairs = this.stack.splice(this.stack.length - n * 2, n * 2);
+                    const total = n * 2;
+                    const start = this.stack.length - total;
+                    const pairs = this.stack.slice(start);
+                    this.stack.length = start;
                     for (let i = 0; i < pairs.length; i += 2) entries.set(auraToString(pairs[i]), pairs[i + 1]);
                     this.push({ type: 'map', entries } as AuraMap);
                     break;
                 }
                 case 'BUILD_RANGE': {
-                    const end = this.pop() as number, start = this.pop() as number;
+                    const end = this.expectNumber(this.pop(), 'range');
+                    const start = this.expectNumber(this.pop(), 'range');
                     this.push({ type: 'range', start, end, inclusive: instr.arg as boolean } as AuraRange);
                     break;
                 }
                 case 'BUILD_ENUM': {
                     const [tag, countStr] = (instr.arg as string).split(':');
                     const n = parseInt(countStr, 10);
-                    const vals = this.stack.splice(this.stack.length - n, n);
+                    const start = this.stack.length - n;
+                    const vals = this.stack.slice(start);
+                    this.stack.length = start;
                     this.push({ type: 'enum', tag, values: vals } as AuraEnum);
                     break;
                 }
                 case 'BUILD_STRING': {
                     const n = instr.arg as number;
-                    const parts = this.stack.splice(this.stack.length - n, n);
+                    const start = this.stack.length - n;
+                    const parts = this.stack.slice(start);
+                    this.stack.length = start;
                     this.push(parts.map(auraToString).join(''));
                     break;
                 }
@@ -224,10 +249,11 @@ export class VM {
                     const val = this.pop();
                     const obj = this.pop();
                     const attr = instr.arg as string;
+                    if (obj === null) runtimeError(`vm.set_attr: expected object, got nil`);
                     if ((obj as any)?.type === 'instance') {
                         (obj as AuraInstance).fields.set(attr, val);
                     } else {
-                        runtimeError(`Cannot set attribute '${attr}' on ${auraToString(obj)}`);
+                        this.typeError('set_attr', 'instance', obj);
                     }
                     break;
                 }
@@ -236,29 +262,39 @@ export class VM {
                     const obj = this.pop();
                     if ((obj as any)?.type === 'list') {
                         const list = obj as AuraList;
-                        const i = idx as number;
-                        const realIdx = i < 0 ? list.items.length + i : i;
-                        if (realIdx < 0 || realIdx >= list.items.length) runtimeError(`Index ${i} out of bounds`);
+                        const realIdx = this.resolveIndex(idx, list.items.length, 'index');
                         this.push(list.items[realIdx]);
                     } else if ((obj as any)?.type === 'map') {
                         const m = obj as AuraMap;
                         this.push(m.entries.get(auraToString(idx)) ?? null);
+                    } else if (typeof obj === 'string') {
+                        const str = obj as string;
+                        const realIdx = this.resolveIndex(idx, str.length, 'index');
+                        this.push(str.charAt(realIdx));
                     } else {
-                        runtimeError(`Cannot index ${auraToString(obj)}`);
+                        this.typeError('index', 'list, map, or string', obj);
                     }
                     break;
                 }
                 case 'SET_INDEX': {
                     const val = this.pop(), idx = this.pop(), obj = this.pop();
-                    if ((obj as any)?.type === 'list') (obj as AuraList).items[idx as number] = val;
-                    else if ((obj as any)?.type === 'map') (obj as AuraMap).entries.set(auraToString(idx), val);
-                    else runtimeError(`Cannot index-assign ${auraToString(obj)}`);
+                    if ((obj as any)?.type === 'list') {
+                        const list = obj as AuraList;
+                        const realIdx = this.resolveIndex(idx, list.items.length, 'index');
+                        list.items[realIdx] = val;
+                    } else if ((obj as any)?.type === 'map') {
+                        (obj as AuraMap).entries.set(auraToString(idx), val);
+                    } else {
+                        this.typeError('index_assign', 'list or map', obj);
+                    }
                     break;
                 }
 
                 case 'CALL': {
                     const argc = instr.arg as number;
-                    const args = this.stack.splice(this.stack.length - argc, argc);
+                    const start = this.stack.length - argc;
+                    const args = this.stack.slice(start);
+                    this.stack.length = start;
                     const callee = this.pop();
                     this.callValue(callee, args);
                     break;
@@ -275,7 +311,9 @@ export class VM {
                 case 'CALL_METHOD': {
                     const [method, countStr] = (instr.arg as string).split(':');
                     const argc = parseInt(countStr, 10);
-                    const args = this.stack.splice(this.stack.length - argc, argc);
+                    const start = this.stack.length - argc;
+                    const args = this.stack.slice(start);
+                    this.stack.length = start;
                     const obj = this.pop();
                     this.callMethod(obj, method, args);
                     break;
@@ -306,7 +344,9 @@ export class VM {
 
                 case 'PRINT': {
                     const n = instr.arg as number;
-                    const args = this.stack.splice(this.stack.length - n, n);
+                    const start = this.stack.length - n;
+                    const args = this.stack.slice(start);
+                    this.stack.length = start;
                     process.stdout.write(args.map(auraToString).join('') + '\n');
                     this.push(null);
                     break;
@@ -329,6 +369,7 @@ export class VM {
         }
         if ((callee as any)?.type === 'function') {
             const fn = callee as AuraFunction;
+            this.checkMaxArgs('call', fn.name, fn.params.length, args.length);
             const receiver = fn.receiver;
             const bindings = this.buildFrameBindings(fn, args, receiver);
             this.pushFrame(fn.chunk, bindings.locals, receiver, undefined, this.moduleScopeOf(fn), bindings.localSlots);
@@ -340,9 +381,11 @@ export class VM {
             for (const f of klass.fields) inst.fields.set(f.name, this.materializeDefault(f.defaultVal));
             const initFn = klass.methods.get('init');
             if (initFn) {
+                this.checkMaxArgs('call', `${klass.name}.init`, initFn.params.length, args.length);
                 const bindings = this.buildFrameBindings(initFn, args, inst);
                 this.pushFrame(initFn.chunk, bindings.locals, inst, inst, this.moduleScopeOf(initFn), bindings.localSlots);
             } else {
+                if (args.length > 0) this.arityError('call', klass.name, 0, args.length);
                 this.push(inst);
             }
             return;
@@ -374,6 +417,7 @@ export class VM {
             const fn = attr as AuraFunction;
             const inst = (obj as any)?.type === 'instance' ? obj as AuraInstance : undefined;
             const receiver = inst ?? fn.receiver;
+            this.checkMaxArgs('call_method', method, fn.params.length, args.length);
             const bindings = this.buildFrameBindings(fn, args, receiver);
             this.pushFrame(fn.chunk, bindings.locals, receiver, undefined, this.moduleScopeOf(fn), bindings.localSlots);
             return;
@@ -387,6 +431,7 @@ export class VM {
         }
         if ((callee as any)?.type === 'function') {
             const fn = callee as AuraFunction;
+            this.checkMaxArgs('call', fn.name, fn.params.length, args.length);
             const receiver = fn.receiver;
             const bindings = this.buildFrameBindings(fn, args, receiver);
             const baseDepth = this.frames.length;
@@ -526,7 +571,7 @@ export class VM {
     }
 
     private getAttr(obj: Value, attr: string): Value {
-        if (obj === null) runtimeError(`Cannot access '${attr}' on nil`);
+        if (obj === null) runtimeError(`vm.get_attr: expected object, got nil`);
         if (typeof obj === 'string') {
             const str = obj as string;
             const words = (): string[] => str.match(/[A-Za-z0-9]+/g) ?? [];
@@ -1922,6 +1967,68 @@ export class VM {
         return v;
     }
 
+    private typeName(v: Value): string {
+        if (v === null) return 'nil';
+        if (typeof v === 'boolean') return 'bool';
+        if (typeof v === 'number') return 'number';
+        if (typeof v === 'string') return 'string';
+        const tag = (v as any)?.type;
+        if (!tag) return typeof v;
+        if (tag === 'list') return 'list';
+        if (tag === 'map') return 'map';
+        if (tag === 'range') return 'range';
+        if (tag === 'function') return 'function';
+        if (tag === 'class') return 'class';
+        if (tag === 'instance') return 'instance';
+        if (tag === 'enum') return 'enum';
+        if (tag === 'module') return 'module';
+        if (tag === 'builtin') return 'builtin';
+        if (tag === 'measure') {
+            const m = v as AuraMeasure;
+            return 'measure:' + m.dimension;
+        }
+        if (tag === 'native') {
+            const native = v as AuraNative;
+            return 'native:' + native.kind;
+        }
+        return tag;
+    }
+
+    private typeError(op: string, expected: string, actual: Value): never {
+        runtimeError(`vm.${op}: expected ${expected}, got ${this.typeName(actual)}`);
+    }
+
+    private arityError(op: string, name: string, expected: number, actual: number): never {
+        runtimeError(`vm.${op}: ${name} expects at most ${expected} args, got ${actual}`);
+    }
+
+    private checkMaxArgs(op: string, name: string, expected: number, actual: number): void {
+        if (name === '<lambda>') return;
+        if (actual > expected) this.arityError(op, name, expected, actual);
+    }
+
+    private expectNumber(v: Value, op: string): number {
+        if (typeof v !== 'number') this.typeError(op, 'number', v);
+        return v;
+    }
+
+    private expectInteger(v: Value, op: string): number {
+        const n = this.expectNumber(v, op);
+        if (!Number.isFinite(n)) runtimeError(`vm.${op}: expected finite number, got ${n}`);
+        const i = Math.trunc(n);
+        if (i !== n) runtimeError(`vm.${op}: expected integer, got ${n}`);
+        return i;
+    }
+
+    private resolveIndex(idx: Value, length: number, op: string): number {
+        const raw = this.expectInteger(idx, op);
+        const resolved = raw < 0 ? length + raw : raw;
+        if (resolved < 0 || resolved >= length) {
+            runtimeError(`vm.${op}: expected index in [0, ${Math.max(0, length - 1)}], got ${raw}`);
+        }
+        return resolved;
+    }
+
     private add(a: Value, b: Value): Value {
         if ((a as any)?.type === 'measure' && (b as any)?.type === 'measure') {
             const ma = a as AuraMeasure;
@@ -1939,7 +2046,9 @@ export class VM {
         }
         if (typeof a === 'number' && typeof b === 'number') return a + b;
         if (typeof a === 'string' || typeof b === 'string') return auraToString(a) + auraToString(b);
-        runtimeError(`Cannot add ${auraToString(a)} and ${auraToString(b)}`);
+        const validA = typeof a === 'number' || typeof a === 'string' || (a as any)?.type === 'measure';
+        if (validA) this.typeError('add', 'number, measure, or string', b);
+        this.typeError('add', 'number, measure, or string', a);
     }
 
     private sub(a: Value, b: Value): Value {
@@ -1958,7 +2067,9 @@ export class VM {
             };
         }
         if (typeof a === 'number' && typeof b === 'number') return a - b;
-        runtimeError(`Cannot subtract ${auraToString(b)} from ${auraToString(a)}`);
+        const validA = typeof a === 'number' || (a as any)?.type === 'measure';
+        if (validA) this.typeError('sub', 'number or measure', b);
+        this.typeError('sub', 'number or measure', a);
     }
 
     private mul(a: Value, b: Value): Value {
@@ -1982,12 +2093,14 @@ export class VM {
             };
         }
         if (typeof a === 'number' && typeof b === 'number') return a * b;
-        runtimeError(`Cannot multiply ${auraToString(a)} and ${auraToString(b)}`);
+        const validA = typeof a === 'number' || (a as any)?.type === 'measure';
+        if (validA) this.typeError('mul', 'number or measure', b);
+        this.typeError('mul', 'number or measure', a);
     }
 
     private div(a: Value, b: Value): Value {
-        if (typeof b === 'number' && b === 0) runtimeError('Division by zero');
-        if ((b as any)?.type === 'measure' && (b as AuraMeasure).baseValue === 0) runtimeError('Division by zero');
+        if (typeof b === 'number' && b === 0) runtimeError('vm.div: division by zero');
+        if ((b as any)?.type === 'measure' && (b as AuraMeasure).baseValue === 0) runtimeError('vm.div: division by zero');
         if ((a as any)?.type === 'measure' && typeof b === 'number') {
             const m = a as AuraMeasure;
             return { ...m, baseValue: m.baseValue / b };
@@ -2007,7 +2120,9 @@ export class VM {
             };
         }
         if (typeof a === 'number' && typeof b === 'number') return a / b;
-        runtimeError(`Cannot divide ${auraToString(a)} by ${auraToString(b)}`);
+        const validA = typeof a === 'number' || (a as any)?.type === 'measure';
+        if (validA) this.typeError('div', 'number or measure', b);
+        this.typeError('div', 'number or measure', a);
     }
 
     private compare(a: Value, b: Value): number {
@@ -2018,7 +2133,9 @@ export class VM {
             if (ma.dimension !== mb.dimension) runtimeError(`Cannot compare measure:${ma.dimension} and measure:${mb.dimension}`);
             return ma.baseValue - mb.baseValue;
         }
-        runtimeError(`Cannot compare ${auraToString(a)} and ${auraToString(b)}`);
+        const validA = typeof a === 'number' || (a as any)?.type === 'measure';
+        if (validA) this.typeError('compare', 'number or measure', b);
+        this.typeError('compare', 'number or measure', a);
     }
 
     private equal(a: Value, b: Value): boolean {

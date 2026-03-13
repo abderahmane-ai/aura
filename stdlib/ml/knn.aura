@@ -1,0 +1,279 @@
+module std.ml.knn
+
+import std.tensor as tensor
+import std.math as math
+import std.ml.metrics as metrics
+import std.fs as fs
+
+let EPS = 0.000000000001
+let SERIAL_VERSION = 1
+
+class KNN:
+    let kind: String
+    let k: Int
+    let task: String
+    let weights: String
+    var X
+    var y
+    var num_classes
+
+    fn init(k: Int = 5, task: String = "classification", weights: String = "uniform"):
+        if k <= 0:
+            panic("knn.KNN expects k > 0")
+        if task != "classification" and task != "regression":
+            panic("knn task must be classification or regression")
+        if weights != "uniform" and weights != "distance":
+            panic("knn weights must be uniform or distance")
+        self.kind = "knn"
+        self.k = k
+        self.task = task
+        self.weights = weights
+        self.X = []
+        self.y = []
+        self.num_classes = 0
+
+    fn fit(X, y, options = {}):
+        let x = tensor.tensor(X)
+        let t = tensor.tensor(y)
+        __validate_dataset(x, t)
+        self.X = x.to_list()
+        self.y = __label_list(t, x.shape()[0])
+        if self.task == "classification":
+            __ensure_class_labels(self.y)
+            self.num_classes = __infer_classes(self.y)
+        return self
+
+    fn predict(X):
+        let x = tensor.tensor(X)
+        if x.rank() != 2:
+            panic("knn.predict expects input rank-2 [n, d]")
+        let rows = x.to_list()
+        let out = []
+        for row in rows:
+            if self.task == "regression":
+                out.push(__predict_regression(self, row))
+            else:
+                out.push(__predict_class(self, row))
+        return tensor.tensor(out)
+
+    fn predict_proba(X):
+        if self.task != "classification":
+            panic("knn.predict_proba only supports classification")
+        let x = tensor.tensor(X)
+        if x.rank() != 2:
+            panic("knn.predict_proba expects input rank-2 [n, d]")
+        let rows = x.to_list()
+        let out = []
+        for row in rows:
+            out.push(__predict_proba_row(self, row))
+        return tensor.tensor(out)
+
+    fn evaluate(X, y):
+        let x = tensor.tensor(X)
+        let t = tensor.tensor(y)
+        __validate_dataset(x, t)
+        let preds = self.predict(x)
+        if self.task == "regression":
+            let target = tensor.tensor(__label_list(t, x.shape()[0]))
+            let stats = metrics.regression_metrics(preds, target)
+            stats["loss"] = stats["mse"]
+            return stats
+        let stats = metrics.classification_metrics(preds, t, self.num_classes)
+        return stats
+
+    fn state():
+        return __serialize_model(self)
+
+    fn save(path: String):
+        let data = self.state()
+        fs.write_json(path, data)
+        return path
+
+fn model(k: Int = 5, task: String = "classification", weights: String = "uniform"):
+    return KNN(k, task, weights)
+
+fn save(model, path: String):
+    let data = __serialize_model(model)
+    fs.write_json(path, data)
+    return path
+
+fn serialize(model):
+    return model.state()
+
+fn load(path: String):
+    let data = fs.read_json(path)
+    return deserialize(data)
+
+fn deserialize(data):
+    return __deserialize_model(data)
+
+fn __predict_class(model, row):
+    let neighbors = __nearest(model.X, model.y, row, model.k)
+    return __vote_label(neighbors, model.weights)
+
+fn __predict_regression(model, row):
+    let neighbors = __nearest(model.X, model.y, row, model.k)
+    return __mean_label(neighbors, model.weights)
+
+fn __predict_proba_row(model, row):
+    let neighbors = __nearest(model.X, model.y, row, model.k)
+    let counts = []
+    var i = 0
+    while i < model.num_classes:
+        counts.push(0.0)
+        i += 1
+    var total = 0.0
+    for n in neighbors:
+        let label = int(n["label"])
+        let weight = n["weight"]
+        counts[label] = counts[label] + weight
+        total += weight
+    if total == 0:
+        return counts
+    i = 0
+    while i < len(counts):
+        counts[i] = counts[i] / total
+        i += 1
+    return counts
+
+fn __nearest(train_X, train_y, row, k: Int):
+    let dists = []
+    var i = 0
+    while i < len(train_X):
+        let d = __distance(row, train_X[i])
+        dists.push(d)
+        i += 1
+
+    let used = {}
+    let out = []
+    var picked = 0
+    while picked < k and picked < len(dists):
+        var best = nil
+        var best_i = -1
+        i = 0
+        while i < len(dists):
+            if used[i] != true:
+                let d = dists[i]
+                if best == nil or d < best:
+                    best = d
+                    best_i = i
+            i += 1
+        if best_i < 0:
+            break
+        used[best_i] = true
+        let weight = 1.0
+        if best != nil and best > 0:
+            weight = 1.0 / (best + EPS)
+        out.push({"label": train_y[best_i], "dist": best, "weight": weight})
+        picked += 1
+    return out
+
+fn __vote_label(neighbors, weights: String):
+    let counts = {}
+    let labels = []
+    for n in neighbors:
+        let key = str(n["label"])
+        if counts[key] == nil:
+            labels.push(key)
+        var add = 1.0
+        if weights == "distance":
+            add = n["weight"]
+        let v = counts[key]
+        if v == nil:
+            v = 0.0
+        v += add
+        counts[key] = v
+    var best_key = nil
+    var best_val = nil
+    for k in labels:
+        let v = counts[k]
+        if best_val == nil or v > best_val:
+            best_val = v
+            best_key = k
+    if best_key == nil:
+        return 0.0
+    return float(best_key)
+
+fn __mean_label(neighbors, weights: String):
+    var total = 0.0
+    var denom = 0.0
+    for n in neighbors:
+        var w = 1.0
+        if weights == "distance":
+            w = n["weight"]
+        total += float(n["label"]) * w
+        denom += w
+    if denom == 0:
+        return 0.0
+    return total / denom
+
+fn __distance(a, b):
+    var acc = 0.0
+    var i = 0
+    while i < len(a):
+        let d = float(a[i]) - float(b[i])
+        acc += d * d
+        i += 1
+    return sqrt(acc)
+
+fn __validate_dataset(x, t):
+    if x.rank() != 2:
+        panic("knn expects input rank-2 [n, d]")
+    let n = x.shape()[0]
+    if t.rank() == 1 and t.shape()[0] == n:
+        return
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        return
+    panic("knn targets must be [n] or [n,1]")
+
+fn __label_list(t, n: Int):
+    if t.rank() == 1:
+        if t.shape()[0] != n:
+            panic("knn targets length mismatch")
+        return t.to_flat_list()
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        return t.flatten().to_flat_list()
+    panic("knn targets must be rank-1 [n] or rank-2 [n,1]")
+
+fn __infer_classes(labels):
+    var best = -1
+    for v in labels:
+        let iv = int(v)
+        if iv > best:
+            best = iv
+    return best + 1
+
+fn __accuracy(preds, targets):
+    if len(preds) == 0:
+        return 0.0
+    var correct = 0
+    var i = 0
+    while i < len(preds):
+        if int(preds[i]) == int(targets[i]):
+            correct += 1
+        i += 1
+    return correct / len(preds)
+
+fn __ensure_class_labels(labels):
+    for v in labels:
+        let iv = int(v)
+        if v != iv or iv < 0:
+            panic("knn classification labels must be non-negative integers")
+
+fn __serialize_model(model):
+    return {"version": SERIAL_VERSION, "kind": "knn", "k": model.k, "task": model.task, "weights": model.weights, "num_classes": model.num_classes, "X": model.X, "y": model.y}
+
+fn __deserialize_model(data):
+    if data["kind"] != "knn":
+        panic("knn.deserialize expects kind 'knn'")
+    let k = int(data["k"])
+    let task = data["task"]
+    let weights = data["weights"]
+    let inst = KNN(k, task, weights)
+    let nc = data["num_classes"]
+    if nc == nil:
+        nc = 0
+    inst.num_classes = int(nc)
+    inst.X = data["X"]
+    inst.y = data["y"]
+    return inst

@@ -1,0 +1,24 @@
+import std.test as test
+import std.data.csv as csv
+import std.data.table as table
+import std.ml.preprocess as prep
+import std.ml.pipeline as pipeline
+import std.ml.logistic as logistic
+
+fn main():
+    let text = "age,score,label\n20,10,0\n30,20,1\n25,15,0\n35,30,1\n"
+    let tbl = csv.parse(text)
+    let shape = tbl.shape()
+    test.assert_equal(shape[0], 4)
+    test.assert_equal(shape[1], 3)
+
+    let scaler = prep.standard_scaler(["age", "score"])
+    let model = logistic.model(2, 1)
+    let pipe = pipeline.pipeline([scaler], model, "label")
+    pipe.fit(tbl, {"epochs": 60, "lr": 0.2, "seed": 2})
+
+    let preds = pipe.predict(tbl)
+    test.assert_equal(preds.shape()[0], 4)
+
+    let metrics = pipe.evaluate(tbl)
+    test.assert_true(metrics["loss"] >= 0.0)

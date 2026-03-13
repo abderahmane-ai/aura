@@ -1,0 +1,80 @@
+import std.io as io
+import std.fs as fs
+import std.data.csv as csv
+import std.data.table as table
+import std.math as math
+import std.ml.preprocess as prep
+import std.ml.pipeline as pipeline
+import std.ml.logistic as logistic
+
+fn split_table(tbl, test_ratio: Float64 = 0.25, seed: Int = 21):
+    if test_ratio <= 0 or test_ratio >= 1:
+        panic("split_table expects test_ratio between 0 and 1")
+    let rows = tbl.rows
+    let n = len(rows)
+    if n < 2:
+        panic("split_table expects at least 2 rows")
+
+    let idx = []
+    var i = 0
+    while i < n:
+        idx.push(i)
+        i += 1
+
+    let rng = math.rng(seed)
+    let shuffled = math.shuffle(rng, idx)
+
+    var test_n = int(float(n) * test_ratio)
+    if test_n < 1:
+        test_n = 1
+    if test_n >= n:
+        test_n = n - 1
+
+    let train_rows = []
+    let test_rows = []
+    var j = 0
+    while j < len(shuffled):
+        let k = shuffled[j]
+        if j < test_n:
+            test_rows.push(to_list(rows[k]))
+        else:
+            train_rows.push(to_list(rows[k]))
+        j += 1
+
+    let train_tbl = table.table(tbl.columns, train_rows, tbl.types, tbl.meta)
+    let test_tbl = table.table(tbl.columns, test_rows, tbl.types, tbl.meta)
+    return {"train": train_tbl, "test": test_tbl}
+
+fn feature_columns(tbl, target: String):
+    let out = []
+    for name in tbl.columns:
+        if name != target:
+            out.push(name)
+    return out
+
+fn main():
+    let raw = fs.read_text("../data/wdbc.raw").trim()
+    let header = "id,diagnosis,mean_radius,mean_texture,mean_perimeter,mean_area,mean_smoothness,mean_compactness,mean_concavity,mean_concave_points,mean_symmetry,mean_fractal_dimension,radius_se,texture_se,perimeter_se,area_se,smoothness_se,compactness_se,concavity_se,concave_points_se,symmetry_se,fractal_dimension_se,worst_radius,worst_texture,worst_perimeter,worst_area,worst_smoothness,worst_compactness,worst_concavity,worst_concave_points,worst_symmetry,worst_fractal_dimension"
+    let csv_text = header + "\n" + raw
+    let tbl = csv.parse(csv_text, {"header": true, "trim": true, "skip_empty": true})
+    let tbl2 = tbl.drop_cols(["id"])
+
+    let split = split_table(tbl2, 0.25, 21)
+    let features = feature_columns(tbl2, "diagnosis")
+
+    let scaler = prep.standard_scaler(features)
+    let encoder = prep.label_encoder("diagnosis")
+    let model = logistic.model(len(features), 1)
+    let pipe = pipeline.pipeline([scaler, encoder], model, "diagnosis", features)
+
+    let options = {"epochs": 250, "lr": 0.08, "batch_size": 64, "seed": 21}
+    pipe.fit(split["train"], options)
+
+    let train_metrics = pipe.evaluate(split["train"])
+    let test_metrics = pipe.evaluate(split["test"])
+    let train_loss = train_metrics["loss"]
+    let train_acc = train_metrics["accuracy"]
+    let test_loss = test_metrics["loss"]
+    let test_acc = test_metrics["accuracy"]
+    io.println("wdbc logistic train loss={train_loss} acc={train_acc}")
+    io.println("wdbc logistic test loss={test_loss} acc={test_acc}")

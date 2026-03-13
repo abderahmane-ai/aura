@@ -1,0 +1,45 @@
+import std.io as io
+import std.math as math
+import std.tensor as tensor
+import std.ml.linear as linear
+
+fn make_linear(n: Int, d: Int, noise: Float64, seed: Int):
+    let rng = math.rng(seed)
+    let w = []
+    var j = 0
+    while j < d:
+        w.push(math.rand(rng, -2.0, 2.0))
+        j += 1
+    let b = 0.4
+    let X = []
+    let y = []
+    var i = 0
+    while i < n:
+        let row = []
+        j = 0
+        while j < d:
+            row.push(math.rand(rng, -1.0, 1.0))
+            j += 1
+        var acc = 0.0
+        j = 0
+        while j < d:
+            acc += float(row[j]) * float(w[j])
+            j += 1
+        let eps = math.rand(rng, -noise, noise)
+        y.push(acc + b + eps)
+        X.push(row)
+        i += 1
+    return {"X": tensor.tensor(X), "y": tensor.tensor(y)}
+
+fn main():
+    let data = make_linear(240, 3, 0.05, 7)
+
+    let model = linear.ridge(3, 0.001)
+    let options = {"epochs": 220, "lr": 0.08, "batch_size": 64, "seed": 7}
+    model.fit(data["X"], data["y"], options)
+
+    let metrics = model.evaluate(data["X"], data["y"])
+    let mse = metrics["mse"]
+    let rmse = metrics["rmse"]
+    let mae = metrics["mae"]
+    io.println("linear ridge mse={mse} rmse={rmse} mae={mae}")

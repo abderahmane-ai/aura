@@ -1136,15 +1136,13 @@ export function makeIterator(v: Value): AuraIterator {
     if ((v as any).type === 'list') return { type: 'iter', source: v as AuraList, index: 0 };
     if ((v as any).type === 'range') return { type: 'iter', source: v as AuraRange, index: 0 };
     if ((v as any).type === 'map') {
-        const keys = [...(v as AuraMap).entries.keys()];
+        const keys = toSortedKeys((v as AuraMap).entries);
         return { type: 'iter', source: { type: 'list', items: keys }, index: 0 };
     }
     if ((v as any).type === 'native') {
         const native = v as AuraNative;
         if (native.kind === 'hashmap' || native.kind === 'tree') {
-            const keys = native.kind === 'tree'
-                ? toSortedKeys(native.data as Map<string, Value>)
-                : [...(native.data as Map<string, Value>).keys()];
+            const keys = toSortedKeys(native.data as Map<string, Value>);
             return { type: 'iter', source: { type: 'list', items: keys }, index: 0 };
         }
         if (native.kind === 'heap') {

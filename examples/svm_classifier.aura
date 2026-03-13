@@ -1,0 +1,17 @@
+import std.io as io
+import std.data.synthetic as synthetic
+import std.ml.svm as svm
+
+fn main():
+    let data = synthetic.multiclass_blobs(3, 80, 2, 0.5, 3.2, 12)
+    let split = synthetic.train_test_split(data["X"], data["y"], 0.25, true, 12)
+
+    let model = svm.model(2, 3)
+    let options = {"epochs": 200, "lr": 0.04, "batch_size": 64, "seed": 12}
+    model.fit(split["X_train"], split["y_train"], options)
+
+    let train_metrics = model.evaluate(split["X_train"], split["y_train"])
+    let test_metrics = model.evaluate(split["X_test"], split["y_test"])
+    let train_acc = train_metrics["accuracy"]
+    let test_acc = test_metrics["accuracy"]
+    io.println("svm multiclass train acc={train_acc} test acc={test_acc}")

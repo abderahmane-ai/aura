@@ -1,0 +1,371 @@
+module std.ml.naive_bayes
+
+import std.tensor as tensor
+import std.math as math
+import std.ml.metrics as metrics
+import std.fs as fs
+
+let SERIAL_VERSION = 1
+let EPS = 0.000000000001
+
+class NaiveBayes:
+    let kind: String
+    let variant: String
+    let alpha: Float64
+    let eps: Float64
+    var class_log_prior
+    var mean
+    var variance
+    var feature_log_prob
+    var num_classes
+    var input_dim
+
+    fn init(variant: String = "gaussian", alpha: Float64 = 1.0, eps: Float64 = 0.000000001):
+        if variant != "gaussian" and variant != "multinomial":
+            panic("naive_bayes.NaiveBayes variant must be gaussian or multinomial")
+        if alpha <= 0:
+            panic("naive_bayes.NaiveBayes alpha must be > 0")
+        if eps <= 0:
+            panic("naive_bayes.NaiveBayes eps must be > 0")
+        self.kind = "naive_bayes"
+        self.variant = variant
+        self.alpha = alpha
+        self.eps = eps
+        self.class_log_prior = []
+        self.mean = []
+        self.variance = []
+        self.feature_log_prob = []
+        self.num_classes = 0
+        self.input_dim = 0
+
+    fn fit(X, y, options = {}):
+        let x = tensor.tensor(X)
+        let t = tensor.tensor(y)
+        __validate_dataset(x, t)
+        let n = x.shape()[0]
+        let d = x.shape()[1]
+        self.input_dim = d
+
+        let alpha = float(__opt(options, "alpha", self.alpha))
+        let eps = float(__opt(options, "eps", self.eps))
+        if alpha <= 0:
+            panic("naive_bayes.fit alpha must be > 0")
+        if eps <= 0:
+            panic("naive_bayes.fit eps must be > 0")
+        self.alpha = alpha
+        self.eps = eps
+
+        let rows = x.to_list()
+        let labels = __label_list(t, n)
+        __ensure_class_labels(labels)
+        let num_classes = __infer_classes(labels)
+        self.num_classes = num_classes
+
+        if self.variant == "gaussian":
+            let model = __fit_gaussian(rows, labels, num_classes, d, eps)
+            self.mean = model["mean"]
+            self.variance = model["variance"]
+            self.class_log_prior = model["class_log_prior"]
+        else:
+            let model = __fit_multinomial(rows, labels, num_classes, d, alpha)
+            self.feature_log_prob = model["feature_log_prob"]
+            self.class_log_prior = model["class_log_prior"]
+        return self
+
+    fn predict(X):
+        let x = tensor.tensor(X)
+        if x.rank() != 2:
+            panic("naive_bayes.predict expects input rank-2 [n, d]")
+        if self.input_dim > 0 and x.shape()[1] != self.input_dim:
+            panic("naive_bayes.predict input_dim mismatch")
+        let rows = x.to_list()
+        let out = []
+        for row in rows:
+            out.push(__predict_row(self, row))
+        return tensor.tensor(out)
+
+    fn predict_proba(X):
+        let x = tensor.tensor(X)
+        if x.rank() != 2:
+            panic("naive_bayes.predict_proba expects input rank-2 [n, d]")
+        if self.input_dim > 0 and x.shape()[1] != self.input_dim:
+            panic("naive_bayes.predict_proba input_dim mismatch")
+        let rows = x.to_list()
+        let out = []
+        for row in rows:
+            out.push(__predict_proba_row(self, row))
+        return tensor.tensor(out)
+
+    fn evaluate(X, y):
+        let x = tensor.tensor(X)
+        let t = tensor.tensor(y)
+        __validate_dataset(x, t)
+        let preds = self.predict(x)
+        let stats = metrics.classification_metrics(preds, t, self.num_classes)
+        stats["loss"] = 1.0 - stats["accuracy"]
+        return stats
+
+    fn state():
+        return __serialize_model(self)
+
+    fn save(path: String):
+        let data = self.state()
+        fs.write_json(path, data)
+        return path
+
+fn model(variant: String = "gaussian", alpha: Float64 = 1.0, eps: Float64 = 0.000000001):
+    return NaiveBayes(variant, alpha, eps)
+
+fn save(model, path: String):
+    let data = __serialize_model(model)
+    fs.write_json(path, data)
+    return path
+
+fn serialize(model):
+    return model.state()
+
+fn load(path: String):
+    let data = fs.read_json(path)
+    return deserialize(data)
+
+fn deserialize(data):
+    return __deserialize_model(data)
+
+fn __predict_row(model, row):
+    let log_probs = __log_probs(model, row)
+    return __argmax(log_probs)
+
+fn __predict_proba_row(model, row):
+    let log_probs = __log_probs(model, row)
+    return __softmax(log_probs)
+
+fn __log_probs(model, row):
+    let k = model.num_classes
+    let out = []
+    var c = 0
+    while c < k:
+        out.push(model.class_log_prior[c])
+        c += 1
+    if model.variant == "gaussian":
+        let mean = model.mean
+        let variance = model.variance
+        c = 0
+        while c < k:
+            var acc = out[c]
+            var j = 0
+            while j < len(row):
+                let mu = float(mean[c][j])
+                let vv = float(variance[c][j])
+                let x = float(row[j])
+                let diff = x - mu
+                acc += -0.5 * (math.ln(2.0 * math.PI * vv) + (diff * diff) / vv)
+                j += 1
+            out[c] = acc
+            c += 1
+    else:
+        let logp = model.feature_log_prob
+        c = 0
+        while c < k:
+            var acc = out[c]
+            var j = 0
+            while j < len(row):
+                let x = float(row[j])
+                if x < 0:
+                    panic("naive_bayes.multinomial expects non-negative features")
+                acc += x * float(logp[c][j])
+                j += 1
+            out[c] = acc
+            c += 1
+    return out
+
+fn __fit_gaussian(rows, labels, num_classes: Int, d: Int, eps: Float64):
+    let counts = __zeros(num_classes)
+    let sums = __zeros_2d(num_classes, d)
+    let sumsq = __zeros_2d(num_classes, d)
+
+    var i = 0
+    while i < len(rows):
+        let c = int(labels[i])
+        counts[c] = counts[c] + 1.0
+        var j = 0
+        while j < d:
+            let x = float(rows[i][j])
+            sums[c][j] = sums[c][j] + x
+            sumsq[c][j] = sumsq[c][j] + x * x
+            j += 1
+        i += 1
+
+    let mean = __zeros_2d(num_classes, d)
+    let variance = __zeros_2d(num_classes, d)
+    let class_log_prior = []
+
+    var c = 0
+    let total = len(rows)
+    while c < num_classes:
+        let n = counts[c]
+        if n == 0:
+            class_log_prior.push(-9999999999.0)
+            c += 1
+            continue
+        class_log_prior.push(math.ln(n / total))
+        var j = 0
+        while j < d:
+            let mu = sums[c][j] / n
+            let vv = (sumsq[c][j] / n) - (mu * mu)
+            if vv < eps:
+                vv = eps
+            mean[c][j] = mu
+            variance[c][j] = vv
+            j += 1
+        c += 1
+    return {"mean": mean, "variance": variance, "class_log_prior": class_log_prior}
+
+fn __fit_multinomial(rows, labels, num_classes: Int, d: Int, alpha: Float64):
+    let counts = __zeros(num_classes)
+    let feature_counts = __zeros_2d(num_classes, d)
+    let class_totals = __zeros(num_classes)
+
+    var i = 0
+    while i < len(rows):
+        let c = int(labels[i])
+        counts[c] = counts[c] + 1.0
+        var j = 0
+        while j < d:
+            let x = float(rows[i][j])
+            if x < 0:
+                panic("naive_bayes.multinomial expects non-negative features")
+            feature_counts[c][j] = feature_counts[c][j] + x
+            class_totals[c] = class_totals[c] + x
+            j += 1
+        i += 1
+
+    let feature_log_prob = __zeros_2d(num_classes, d)
+    let class_log_prior = []
+    let total = len(rows)
+    var c = 0
+    while c < num_classes:
+        let n = counts[c]
+        if n == 0:
+            class_log_prior.push(-9999999999.0)
+        else:
+            class_log_prior.push(math.ln(n / total))
+        let denom = class_totals[c] + alpha * d
+        var j = 0
+        while j < d:
+            let num = feature_counts[c][j] + alpha
+            feature_log_prob[c][j] = math.ln(num / denom)
+            j += 1
+        c += 1
+    return {"feature_log_prob": feature_log_prob, "class_log_prior": class_log_prior}
+
+fn __softmax(values):
+    if len(values) == 0:
+        return []
+    var max_v = values[0]
+    for v in values:
+        if v > max_v:
+            max_v = v
+    let exp_vals = []
+    var sum = 0.0
+    for v in values:
+        let e = math.exp(v - max_v)
+        exp_vals.push(e)
+        sum += e
+    let out = []
+    for e in exp_vals:
+        if sum == 0:
+            out.push(0.0)
+        else:
+            out.push(e / sum)
+    return out
+
+fn __zeros(n: Int):
+    let out = []
+    var i = 0
+    while i < n:
+        out.push(0.0)
+        i += 1
+    return out
+
+fn __zeros_2d(r: Int, c: Int):
+    let out = []
+    var i = 0
+    while i < r:
+        let row = []
+        var j = 0
+        while j < c:
+            row.push(0.0)
+            j += 1
+        out.push(row)
+        i += 1
+    return out
+
+fn __label_list(t, n: Int):
+    if t.rank() == 1:
+        if t.shape()[0] != n:
+            panic("naive_bayes targets length mismatch")
+        return t.to_flat_list()
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        return t.flatten().to_flat_list()
+    panic("naive_bayes targets must be rank-1 [n] or rank-2 [n,1]")
+
+fn __ensure_class_labels(labels):
+    for v in labels:
+        let iv = int(v)
+        if v != iv or iv < 0:
+            panic("naive_bayes labels must be non-negative integers")
+
+fn __infer_classes(labels):
+    var best = -1
+    for v in labels:
+        let iv = int(v)
+        if iv > best:
+            best = iv
+    return best + 1
+
+fn __argmax(values):
+    var best_i = 0
+    var best_v = values[0]
+    var i = 1
+    while i < len(values):
+        if values[i] > best_v:
+            best_v = values[i]
+            best_i = i
+        i += 1
+    return best_i
+
+fn __validate_dataset(x, t):
+    if x.rank() != 2:
+        panic("naive_bayes expects input rank-2 [n, d]")
+    let n = x.shape()[0]
+    if t.rank() == 1 and t.shape()[0] == n:
+        return
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        return
+    panic("naive_bayes targets must be [n] or [n,1]")
+
+fn __serialize_model(model):
+    return {"version": SERIAL_VERSION, "kind": "naive_bayes", "variant": model.variant, "alpha": model.alpha, "eps": model.eps, "num_classes": model.num_classes, "input_dim": model.input_dim, "class_log_prior": model.class_log_prior, "mean": model.mean, "variance": model.variance, "feature_log_prob": model.feature_log_prob}
+
+fn __deserialize_model(data):
+    if data["kind"] != "naive_bayes":
+        panic("naive_bayes.deserialize expects kind 'naive_bayes'")
+    let variant = data["variant"]
+    let alpha = float(data["alpha"])
+    let eps = float(data["eps"])
+    let inst = NaiveBayes(variant, alpha, eps)
+    inst.num_classes = int(data["num_classes"])
+    inst.input_dim = int(data["input_dim"])
+    inst.class_log_prior = data["class_log_prior"]
+    inst.mean = data["mean"]
+    inst.variance = data["variance"]
+    inst.feature_log_prob = data["feature_log_prob"]
+    return inst
+
+fn __opt(options, key: String, fallback):
+    if options == nil:
+        return fallback
+    let value = options[key]
+    if value == nil:
+        return fallback
+    return value

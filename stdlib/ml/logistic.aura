@@ -3,38 +3,98 @@ module std.ml.logistic
 import std.tensor as tensor
 import std.optim as optim
 import std.math as math
+import std.ml.metrics as metrics
+import std.fs as fs
 
 let EPS = 0.000000000001
+let DEFAULT_L2 = 0.001
+let SERIAL_VERSION = 1
+
+class Logistic:
+    let kind: String
+    let input_dim: Int
+    let num_classes: Int
+    var W
+    var b
+
+    fn init(input_dim: Int, num_classes: Int = 1):
+        if input_dim <= 0:
+            panic("logistic.Logistic expects input_dim > 0")
+        self.kind = "logistic"
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        if num_classes <= 1:
+            self.W = tensor.zeros([input_dim])
+            self.b = tensor.zeros([1])
+        else:
+            self.W = tensor.zeros([input_dim, num_classes])
+            self.b = tensor.zeros([num_classes])
+
+    fn clone():
+        let copy = Logistic(self.input_dim, self.num_classes)
+        copy.W = self.W.clone()
+        copy.b = self.b.clone()
+        return copy
+
+    fn logits(X):
+        return logits(__class_model(self), X)
+
+    fn predict_proba(X):
+        return predict_proba(__class_model(self), X)
+
+    fn predict(X, threshold: Float64 = 0.5):
+        return predict(__class_model(self), X, threshold)
+
+    fn loss(X, y, l2: Float64 = DEFAULT_L2):
+        return loss(__class_model(self), X, y, l2)
+
+    fn evaluate(X, y, l2: Float64 = DEFAULT_L2):
+        return evaluate(__class_model(self), X, y, l2)
+
+    fn fit(X, y, options = {}):
+        let model = __class_model(self)
+        let result = fit(model, X, y, options)
+        self.W = model["W"]
+        self.b = model["b"]
+        return result
+
+    fn state():
+        return __serialize_model(__class_model(self))
+
+    fn save(path: String):
+        let data = self.state()
+        fs.write_json(path, data)
+        return path
+
+fn model(input_dim: Int, num_classes: Int = 1):
+    return Logistic(input_dim, num_classes)
+
+fn save(model, path: String):
+    let data = __serialize_model(model)
+    fs.write_json(path, data)
+    return path
+
+fn serialize(model):
+    return model.state()
+
+fn load(path: String):
+    let data = fs.read_json(path)
+    return deserialize(data)
+
+fn deserialize(data):
+    return __deserialize_model(data)
 
 fn init(input_dim: Int, num_classes: Int = 1):
     if input_dim <= 0:
         panic("logistic.init expects input_dim > 0")
 
     if num_classes <= 1:
-        return {
-            "kind": "binary",
-            "input_dim": input_dim,
-            "num_classes": 1,
-            "W": tensor.zeros([input_dim]),
-            "b": tensor.zeros([1])
-        }
+        return {"kind": "binary", "input_dim": input_dim, "num_classes": 1, "W": tensor.zeros([input_dim]), "b": tensor.zeros([1])}
 
-    return {
-        "kind": "multiclass",
-        "input_dim": input_dim,
-        "num_classes": num_classes,
-        "W": tensor.zeros([input_dim, num_classes]),
-        "b": tensor.zeros([num_classes])
-    }
+    return {"kind": "multiclass", "input_dim": input_dim, "num_classes": num_classes, "W": tensor.zeros([input_dim, num_classes]), "b": tensor.zeros([num_classes])}
 
 fn clone_model(model):
-    return {
-        "kind": model["kind"],
-        "input_dim": model["input_dim"],
-        "num_classes": model["num_classes"],
-        "W": model["W"].clone(),
-        "b": model["b"].clone()
-    }
+    return {"kind": model["kind"], "input_dim": model["input_dim"], "num_classes": model["num_classes"], "W": model["W"].clone(), "b": model["b"].clone()}
 
 fn logits(model, X):
     let x = tensor.tensor(X)
@@ -50,11 +110,16 @@ fn predict_proba(model, X):
 fn predict(model, X, threshold: Float64 = 0.5):
     let p = predict_proba(model, X)
     if model["num_classes"] == 1:
-        return p.map(fn(v, idx):
-            if v >= threshold:
-                return 1.0
-            return 0.0
-        )
+        let values = p.to_flat_list()
+        let out = []
+        var i = 0
+        while i < len(values):
+            if values[i] >= threshold:
+                out.push(1.0)
+            else:
+                out.push(0.0)
+            i += 1
+        return tensor.tensor(out)
 
     let rows = p.to_list()
     let out = []
@@ -64,7 +129,10 @@ fn predict(model, X, threshold: Float64 = 0.5):
         i += 1
     return tensor.tensor(out)
 
-fn loss(model, X, y, l2: Float64 = 0.0):
+fn loss(model, X, y, l2: Float64 = DEFAULT_L2):
+    var l2v = l2
+    if l2v == nil:
+        l2v = DEFAULT_L2
     let x = tensor.tensor(X)
     let t = tensor.tensor(y)
     __validate_dataset_for_model(model, x, t)
@@ -77,30 +145,32 @@ fn loss(model, X, y, l2: Float64 = 0.0):
     else:
         let target = __multiclass_targets(t, x.shape()[0], model["num_classes"])
         base = tensor.cross_entropy_loss(p, target, EPS)
-    return base + __l2_penalty(model["W"], l2)
+    return base + __l2_penalty(model["W"], l2v)
 
-fn evaluate(model, X, y, l2: Float64 = 0.0):
+fn evaluate(model, X, y, l2: Float64 = DEFAULT_L2):
+    var l2v = l2
+    if l2v == nil:
+        l2v = DEFAULT_L2
     let x = tensor.tensor(X)
     let t = tensor.tensor(y)
     __validate_dataset_for_model(model, x, t)
 
     let p = predict_proba(model, x)
-    var acc = 0.0
     var base = 0.0
-
     if model["num_classes"] == 1:
         let target = __binary_targets(t, x.shape()[0])
-        acc = tensor.binary_accuracy(p, target, 0.5)
         base = tensor.bce_loss(p, target, EPS)
     else:
         let target = __multiclass_targets(t, x.shape()[0], model["num_classes"])
-        acc = tensor.classification_accuracy(p, target)
         base = tensor.cross_entropy_loss(p, target, EPS)
 
-    return {
-        "loss": base + __l2_penalty(model["W"], l2),
-        "accuracy": acc
-    }
+    let preds = predict(model, x)
+    var classes = model["num_classes"]
+    if classes <= 1:
+        classes = 2
+    let stats = metrics.classification_metrics(preds, t, classes)
+    stats["loss"] = base + __l2_penalty(model["W"], l2v)
+    return stats
 
 fn fit(model, X, y, options = {}):
     let x = tensor.tensor(X)
@@ -117,7 +187,7 @@ fn fit(model, X, y, options = {}):
         batch_size = n
 
     let shuffle = __opt(options, "shuffle", true) == true
-    let l2 = float(__opt(options, "l2", 0.0))
+    let l2 = float(__opt(options, "l2", DEFAULT_L2))
     let verbose = __opt(options, "verbose", false) == true
     var log_every = int(__opt(options, "log_every", 10))
     if log_every <= 0:
@@ -167,11 +237,7 @@ fn fit(model, X, y, options = {}):
 
         epoch += 1
 
-    return {
-        "model": model,
-        "optimizer": opt,
-        "history": history
-    }
+    return {"model": model, "optimizer": opt, "history": history}
 
 fn __gradients(model, x_batch, y_batch, l2: Float64):
     let x = tensor.tensor(x_batch)
@@ -237,20 +303,25 @@ fn __binary_targets(t, n: Int):
     if t.rank() == 1:
         if t.shape()[0] != n:
             panic("binary targets length mismatch")
+        __ensure_binary_labels(t)
         return t
     if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
-        return t.flatten()
+        let flat = t.flatten()
+        __ensure_binary_labels(flat)
+        return flat
     panic("binary targets must be rank-1 [n] or rank-2 [n,1]")
 
 fn __multiclass_targets(t, n: Int, num_classes: Int):
     if t.rank() == 1:
         if t.shape()[0] != n:
             panic("multiclass target length mismatch")
+        __ensure_multiclass_labels(t.to_flat_list(), num_classes)
         return tensor.one_hot(t.to_flat_list(), num_classes)
 
     if t.rank() == 2:
         if t.shape()[0] != n or t.shape()[1] != num_classes:
             panic("multiclass one-hot target shape mismatch")
+        __ensure_one_hot(t, num_classes)
         return t
 
     panic("multiclass targets must be rank-1 labels or rank-2 one-hot")
@@ -267,19 +338,23 @@ fn __validate_dataset_for_model(model, x, t):
 
     if model["num_classes"] == 1:
         if t.rank() == 1 and t.shape()[0] == n:
+            __ensure_binary_labels(t)
             return
         if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+            __ensure_binary_labels(t.flatten())
             return
         panic("binary logistic expects target shape [n] or [n,1]")
 
     if t.rank() == 1 and t.shape()[0] == n:
+        __ensure_multiclass_labels(t.to_flat_list(), model["num_classes"])
         return
     if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == model["num_classes"]:
+        __ensure_one_hot(t, model["num_classes"])
         return
     panic("multiclass logistic expects target shape [n] or [n,num_classes]")
 
 fn __l2_penalty(w, l2: Float64):
-    if l2 == 0:
+    if l2 == nil or l2 == 0:
         return 0.0
     return 0.5 * l2 * w.mul(w).mean()
 
@@ -294,6 +369,55 @@ fn __argmax_row(row):
         i += 1
     return best_i
 
+fn __ensure_binary_labels(t):
+    let values = tensor.tensor(t).to_flat_list()
+    for v in values:
+        let iv = int(v)
+        if v != iv or (iv != 0 and iv != 1):
+            panic("binary labels must be 0 or 1")
+
+fn __ensure_multiclass_labels(values, num_classes: Int):
+    for v in values:
+        let iv = int(v)
+        if v != iv or iv < 0 or iv >= num_classes:
+            panic("multiclass labels must be integers in [0, num_classes-1]")
+
+fn __ensure_one_hot(t, num_classes: Int):
+    let rows = t.to_list()
+    for row in rows:
+        if len(row) != num_classes:
+            panic("multiclass one-hot target shape mismatch")
+        var sum = 0.0
+        for v in row:
+            if v != 0 and v != 1:
+                panic("multiclass one-hot values must be 0 or 1")
+            sum += float(v)
+        if sum != 1:
+            panic("multiclass one-hot rows must sum to 1")
+
+fn __serialize_model(model):
+    let input_dim = model["input_dim"]
+    let num_classes = model["num_classes"]
+    return {"version": SERIAL_VERSION, "kind": "logistic", "input_dim": input_dim, "num_classes": num_classes, "W": __tensor_state(model["W"]), "b": __tensor_state(model["b"])}
+
+fn __deserialize_model(data):
+    if data["kind"] != "logistic":
+        panic("logistic.deserialize expects kind 'logistic'")
+    let input_dim = int(data["input_dim"])
+    let num_classes = int(data["num_classes"])
+    let inst = Logistic(input_dim, num_classes)
+    inst.W = __tensor_from_state(data["W"])
+    inst.b = __tensor_from_state(data["b"])
+    return inst
+
+fn __tensor_state(t):
+    return {"shape": t.shape(), "values": t.to_flat_list()}
+
+fn __tensor_from_state(state):
+    let shape = state["shape"]
+    let values = state["values"]
+    return tensor.tensor(values).reshape(shape)
+
 fn __opt(options, key: String, fallback):
     if options == nil:
         return fallback
@@ -301,3 +425,11 @@ fn __opt(options, key: String, fallback):
     if value == nil:
         return fallback
     return value
+
+fn __model_kind(num_classes: Int):
+    if num_classes <= 1:
+        return "binary"
+    return "multiclass"
+
+fn __class_model(instance):
+    return {"kind": __model_kind(instance.num_classes), "input_dim": instance.input_dim, "num_classes": instance.num_classes, "W": instance.W, "b": instance.b}

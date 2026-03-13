@@ -377,6 +377,11 @@ export class Compiler {
                     this.patchJump(skip);
                     break;
                 }
+                const folded = this.tryFoldBinary(node);
+                if (folded !== undefined) {
+                    this.emit('PUSH_CONST', this.addConst(folded), node.line);
+                    break;
+                }
                 this.emit_node(node.left);
                 this.emit_node(node.right);
                 const opMap: Record<string, OpCode> = {
@@ -390,6 +395,11 @@ export class Compiler {
             }
 
             case 'UnaryOp': {
+                const folded = this.tryFoldUnary(node);
+                if (folded !== undefined) {
+                    this.emit('PUSH_CONST', this.addConst(folded), node.line);
+                    break;
+                }
                 this.emit_node(node.operand);
                 if (node.op === '-') this.emit('NEG', undefined, node.line);
                 else if (node.op === 'not' || node.op === '!') this.emit('NOT', undefined, node.line);
@@ -756,6 +766,64 @@ export class Compiler {
         if (typeof v === 'number') return 'd:' + (Object.is(v, -0) ? '-0' : String(v));
         if (typeof v === 'string') return 's:' + v;
         return undefined;
+    }
+
+    private tryFoldUnary(node: any): Value | undefined {
+        const val = this.tryConstValue(node.operand);
+        if (val === undefined) return undefined;
+        if (node.op === '-' && typeof val === 'number') return -val;
+        if ((node.op === 'not' || node.op === '!') && this.isConstPrimitive(val)) {
+            return !this.constTruthy(val);
+        }
+        return undefined;
+    }
+
+    private tryFoldBinary(node: any): Value | undefined {
+        const left = this.tryConstValue(node.left);
+        if (left === undefined) return undefined;
+        const right = this.tryConstValue(node.right);
+        if (right === undefined) return undefined;
+
+        if (typeof left === 'number' && typeof right === 'number') {
+            switch (node.op) {
+                case '+': return left + right;
+                case '-': return left - right;
+                case '*': return left * right;
+                case '/': return right === 0 ? undefined : left / right;
+                case '%': return right === 0 ? undefined : left % right;
+                case '**': return Math.pow(left, right);
+                case '==': return left === right;
+                case '!=': return left !== right;
+                case '<': return left < right;
+                case '>': return left > right;
+                case '<=': return left <= right;
+                case '>=': return left >= right;
+                default: return undefined;
+            }
+        }
+
+        if (node.op === '+' && typeof left === 'string' && typeof right === 'string') {
+            return left + right;
+        }
+
+        if ((node.op === '==' || node.op === '!=') &&
+            this.isConstPrimitive(left) && this.isConstPrimitive(right)) {
+            const eq = left === right;
+            return node.op === '==' ? eq : !eq;
+        }
+
+        return undefined;
+    }
+
+    private isConstPrimitive(val: Value): boolean {
+        return val === null || typeof val === 'boolean' || typeof val === 'number' || typeof val === 'string';
+    }
+
+    private constTruthy(val: Value): boolean {
+        if (val === null || val === false) return false;
+        if (typeof val === 'number' && val === 0) return false;
+        if (typeof val === 'string' && val === '') return false;
+        return true;
     }
 
     private emitJump(op: OpCode, line: number): number {

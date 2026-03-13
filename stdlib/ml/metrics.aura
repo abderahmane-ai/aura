@@ -1,0 +1,210 @@
+module std.ml.metrics
+
+import std.tensor as tensor
+
+fn classification_metrics(pred, target, num_classes: Int):
+    if num_classes <= 0:
+        panic("metrics.classification_metrics expects num_classes > 0")
+    let pred_labels = __pred_labels(pred, num_classes)
+    let target_labels = __target_labels(target, num_classes)
+    if len(pred_labels) != len(target_labels):
+        panic("metrics.classification_metrics expects predictions and targets with same length")
+    let conf = __confusion_matrix(target_labels, pred_labels, num_classes)
+    let total = len(pred_labels)
+    let accuracy = __accuracy(conf, total)
+    let agg = __precision_recall_f1(conf)
+    return {"accuracy": accuracy, "precision": agg["precision"], "recall": agg["recall"], "f1": agg["f1"], "confusion": conf}
+
+fn regression_metrics(pred, target):
+    let values = __regression_values(pred, target)
+    let preds = values["pred"]
+    let targets = values["target"]
+    let n = len(preds)
+    if n == 0:
+        return {"mse": 0.0, "rmse": 0.0, "mae": 0.0, "r2": 0.0}
+
+    var sum_sq = 0.0
+    var sum_abs = 0.0
+    var sum_y = 0.0
+    var i = 0
+    while i < n:
+        let p = float(preds[i])
+        let y = float(targets[i])
+        let diff = p - y
+        sum_sq += diff * diff
+        if diff < 0:
+            sum_abs += -diff
+        else:
+            sum_abs += diff
+        sum_y += y
+        i += 1
+
+    let mse = sum_sq / n
+    let rmse = sqrt(mse)
+    let mae = sum_abs / n
+
+    let mean_y = sum_y / n
+    var ss_tot = 0.0
+    i = 0
+    while i < n:
+        let dy = float(targets[i]) - mean_y
+        ss_tot += dy * dy
+        i += 1
+
+    var r2 = 0.0
+    if ss_tot > 0:
+        r2 = 1.0 - (sum_sq / ss_tot)
+    return {"mse": mse, "rmse": rmse, "mae": mae, "r2": r2}
+
+fn __pred_labels(pred, num_classes: Int):
+    let p = tensor.tensor(pred)
+    if p.rank() == 1:
+        let values = p.to_flat_list()
+        __ensure_label_range(values, num_classes, "prediction")
+        return __to_int_list(values)
+    if p.rank() == 2:
+        if p.shape()[1] != num_classes:
+            panic("metrics.classification_metrics expects prediction shape [n, num_classes]")
+        let rows = p.to_list()
+        let out = []
+        for row in rows:
+            if len(row) != num_classes:
+                panic("metrics.classification_metrics expects prediction shape [n, num_classes]")
+            out.push(__argmax_row(row))
+        return out
+    panic("metrics.classification_metrics expects predictions as rank-1 labels or rank-2 scores")
+
+fn __target_labels(target, num_classes: Int):
+    let t = tensor.tensor(target)
+    if t.rank() == 1:
+        let values = t.to_flat_list()
+        __ensure_label_range(values, num_classes, "target")
+        return __to_int_list(values)
+    if t.rank() == 2:
+        if t.shape()[1] != num_classes:
+            panic("metrics.classification_metrics expects target shape [n, num_classes]")
+        __ensure_one_hot(t, num_classes)
+        let rows = t.to_list()
+        let out = []
+        for row in rows:
+            out.push(__argmax_row(row))
+        return out
+    panic("metrics.classification_metrics expects targets as rank-1 labels or rank-2 one-hot")
+
+fn __confusion_matrix(target_labels, pred_labels, num_classes: Int):
+    let conf = []
+    var r = 0
+    while r < num_classes:
+        let row = []
+        var c = 0
+        while c < num_classes:
+            row.push(0.0)
+            c += 1
+        conf.push(row)
+        r += 1
+
+    var i = 0
+    while i < len(target_labels):
+        let t = int(target_labels[i])
+        let p = int(pred_labels[i])
+        if t < 0 or t >= num_classes:
+            panic("metrics.classification_metrics target label out of range")
+        if p < 0 or p >= num_classes:
+            panic("metrics.classification_metrics prediction label out of range")
+        conf[t][p] = conf[t][p] + 1.0
+        i += 1
+    return conf
+
+fn __accuracy(conf, total: Int):
+    if total <= 0:
+        return 0.0
+    var correct = 0.0
+    var i = 0
+    while i < len(conf):
+        correct += float(conf[i][i])
+        i += 1
+    return correct / total
+
+fn __precision_recall_f1(conf):
+    let k = len(conf)
+    if k == 0:
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+    var sum_precision = 0.0
+    var sum_recall = 0.0
+    var sum_f1 = 0.0
+    var c = 0
+    while c < k:
+        let tp = float(conf[c][c])
+        var row_sum = 0.0
+        var col_sum = 0.0
+        var j = 0
+        while j < k:
+            row_sum += float(conf[c][j])
+            col_sum += float(conf[j][c])
+            j += 1
+        let fp = col_sum - tp
+        let fn_count = row_sum - tp
+        var precision = 0.0
+        var recall = 0.0
+        if tp + fp > 0:
+            precision = tp / (tp + fp)
+        if tp + fn_count > 0:
+            recall = tp / (tp + fn_count)
+        var f1 = 0.0
+        if precision + recall > 0:
+            f1 = 2.0 * precision * recall / (precision + recall)
+        sum_precision += precision
+        sum_recall += recall
+        sum_f1 += f1
+        c += 1
+    return {"precision": sum_precision / k, "recall": sum_recall / k, "f1": sum_f1 / k}
+
+fn __ensure_label_range(values, num_classes: Int, label: String):
+    for v in values:
+        let iv = int(v)
+        if v != iv or iv < 0 or iv >= num_classes:
+            panic("metrics.classification_metrics {label} labels must be integers in [0, num_classes-1]")
+
+fn __ensure_one_hot(t, num_classes: Int):
+    let rows = t.to_list()
+    for row in rows:
+        if len(row) != num_classes:
+            panic("metrics.classification_metrics expects target shape [n, num_classes]")
+        var sum = 0.0
+        for v in row:
+            if v != 0 and v != 1:
+                panic("metrics.classification_metrics one-hot values must be 0 or 1")
+            sum += float(v)
+        if sum != 1:
+            panic("metrics.classification_metrics one-hot rows must sum to 1")
+
+fn __argmax_row(row):
+    var best_i = 0
+    var best_v = float(row[0])
+    var i = 1
+    while i < len(row):
+        let v = float(row[i])
+        if v > best_v:
+            best_v = v
+            best_i = i
+        i += 1
+    return best_i
+
+fn __to_int_list(values):
+    let out = []
+    for v in values:
+        out.push(int(v))
+    return out
+
+fn __regression_values(pred, target):
+    var p = tensor.tensor(pred)
+    var t = tensor.tensor(target)
+    if p.rank() == 2 and p.shape()[1] == 1:
+        p = p.flatten()
+    if t.rank() == 2 and t.shape()[1] == 1:
+        t = t.flatten()
+    if p.rank() != 1 or t.rank() != 1:
+        panic("metrics.regression_metrics expects rank-1 predictions and targets")
+    if p.shape()[0] != t.shape()[0]:
+        panic("metrics.regression_metrics expects predictions and targets with same length")
+    return {"pred": p.to_flat_list(), "target": t.to_flat_list()}

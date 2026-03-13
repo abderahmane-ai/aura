@@ -1,0 +1,35 @@
+import std.test as test
+import std.data.synthetic as synthetic
+import std.tensor as tensor
+import std.ml.naive_bayes as nb
+
+fn main():
+    let data = synthetic.multiclass_blobs(3, 90, 2, 0.6, 3.0, 33)
+    let split = synthetic.train_test_split(data["X"], data["y"], 0.25, true, 4)
+    let model = nb.model("gaussian")
+    model.fit(split["X_train"], split["y_train"])
+    let metrics = model.evaluate(split["X_test"], split["y_test"])
+    test.assert_true(metrics["accuracy"] > 0.7)
+
+    let X = []
+    let y = []
+    var i = 0
+    while i < 60:
+        let cls = int(i % 3)
+        let row = [0.0, 0.0, 0.0, 0.0]
+        if cls == 0:
+            row[0] = 3.0
+            row[1] = 1.0
+        elif cls == 1:
+            row[2] = 4.0
+            row[1] = 1.0
+        else:
+            row[3] = 5.0
+        X.push(row)
+        y.push(cls)
+        i += 1
+    let multi = nb.model("multinomial", 1.0)
+    multi.fit(tensor.tensor(X), tensor.tensor(y))
+    let preds = multi.predict(tensor.tensor(X))
+    let metrics2 = multi.evaluate(tensor.tensor(X), tensor.tensor(y))
+    test.assert_true(metrics2["accuracy"] > 0.95)

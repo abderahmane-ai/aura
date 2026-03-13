@@ -1,0 +1,450 @@
+module std.ml.tree
+
+import std.tensor as tensor
+import std.math as math
+import std.ml.metrics as metrics
+import std.fs as fs
+
+let SERIAL_VERSION = 1
+let EPS = 0.000000000001
+
+class DecisionTree:
+    let kind: String
+    let task: String
+    let max_depth: Int
+    let min_samples_split: Int
+    let min_samples_leaf: Int
+    let max_features
+    let seed: Int
+    var root
+    var num_classes
+    var input_dim
+
+    fn init(task: String = "classification", max_depth: Int = 0, min_samples_split: Int = 2, min_samples_leaf: Int = 1, max_features = nil, seed: Int = 42):
+        if task != "classification" and task != "regression":
+            panic("tree.DecisionTree task must be classification or regression")
+        if max_depth < 0:
+            panic("tree.DecisionTree max_depth must be >= 0")
+        if min_samples_split <= 1:
+            panic("tree.DecisionTree min_samples_split must be > 1")
+        if min_samples_leaf <= 0:
+            panic("tree.DecisionTree min_samples_leaf must be > 0")
+        self.kind = "tree"
+        self.task = task
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.max_features = max_features
+        self.seed = seed
+        self.root = nil
+        self.num_classes = 0
+        self.input_dim = 0
+
+    fn fit(X, y, options = {}):
+        let x = tensor.tensor(X)
+        let t = tensor.tensor(y)
+        __validate_dataset(x, t)
+        let n = x.shape()[0]
+        let d = x.shape()[1]
+        self.input_dim = d
+
+        let params = __resolve_params(self, options)
+        let max_depth = params["max_depth"]
+        let min_samples_split = params["min_samples_split"]
+        let min_samples_leaf = params["min_samples_leaf"]
+        let max_features = params["max_features"]
+        let seed = params["seed"]
+
+        let rows = x.to_list()
+        let labels = __label_list(t, n)
+
+        if self.task == "classification":
+            __ensure_class_labels(labels)
+            self.num_classes = __infer_classes(labels)
+        else:
+            self.num_classes = 0
+
+        let rng = math.rng(seed)
+        self.root = __build_tree(rows, labels, 0, rng, self.task, self.num_classes, max_depth, min_samples_split, min_samples_leaf, max_features)
+        return self
+
+    fn predict(X):
+        let x = tensor.tensor(X)
+        if x.rank() != 2:
+            panic("tree.predict expects input rank-2 [n, d]")
+        if self.input_dim > 0 and x.shape()[1] != self.input_dim:
+            panic("tree.predict input_dim mismatch")
+        let rows = x.to_list()
+        let out = []
+        for row in rows:
+            out.push(__predict_row(self.root, row, self.task))
+        return tensor.tensor(out)
+
+    fn predict_proba(X):
+        if self.task != "classification":
+            panic("tree.predict_proba only supports classification")
+        let x = tensor.tensor(X)
+        if x.rank() != 2:
+            panic("tree.predict_proba expects input rank-2 [n, d]")
+        if self.input_dim > 0 and x.shape()[1] != self.input_dim:
+            panic("tree.predict_proba input_dim mismatch")
+        let rows = x.to_list()
+        let out = []
+        for row in rows:
+            out.push(__predict_proba_row(self.root, row, self.num_classes))
+        return tensor.tensor(out)
+
+    fn evaluate(X, y):
+        let x = tensor.tensor(X)
+        let t = tensor.tensor(y)
+        __validate_dataset(x, t)
+        let preds = self.predict(x)
+        if self.task == "classification":
+            let stats = metrics.classification_metrics(preds, t, self.num_classes)
+            stats["loss"] = 1.0 - stats["accuracy"]
+            return stats
+        let target = tensor.tensor(__label_list(t, x.shape()[0]))
+        let stats = metrics.regression_metrics(preds, target)
+        stats["loss"] = stats["mse"]
+        return stats
+
+    fn state():
+        return __serialize_model(self)
+
+    fn save(path: String):
+        let data = self.state()
+        fs.write_json(path, data)
+        return path
+
+fn model(task: String = "classification", max_depth: Int = 0, min_samples_split: Int = 2, min_samples_leaf: Int = 1, max_features = nil, seed: Int = 42):
+    return DecisionTree(task, max_depth, min_samples_split, min_samples_leaf, max_features, seed)
+
+fn save(model, path: String):
+    let data = __serialize_model(model)
+    fs.write_json(path, data)
+    return path
+
+fn serialize(model):
+    return model.state()
+
+fn load(path: String):
+    let data = fs.read_json(path)
+    return deserialize(data)
+
+fn deserialize(data):
+    return __deserialize_model(data)
+
+fn __resolve_params(model, options):
+    let max_depth = int(__opt(options, "max_depth", model.max_depth))
+    let min_samples_split = int(__opt(options, "min_samples_split", model.min_samples_split))
+    let min_samples_leaf = int(__opt(options, "min_samples_leaf", model.min_samples_leaf))
+    let max_features = __opt(options, "max_features", model.max_features)
+    let seed = int(__opt(options, "seed", model.seed))
+    if max_depth < 0:
+        panic("tree.fit max_depth must be >= 0")
+    if min_samples_split <= 1:
+        panic("tree.fit min_samples_split must be > 1")
+    if min_samples_leaf <= 0:
+        panic("tree.fit min_samples_leaf must be > 0")
+    return {"max_depth": max_depth, "min_samples_split": min_samples_split, "min_samples_leaf": min_samples_leaf, "max_features": max_features, "seed": seed}
+
+fn __build_tree(rows, labels, depth: Int, rng, task: String, num_classes: Int, max_depth: Int, min_samples_split: Int, min_samples_leaf: Int, max_features):
+    let n = len(labels)
+    if n == 0:
+        return {"leaf": true, "value": 0.0}
+    if max_depth > 0 and depth >= max_depth:
+        return __make_leaf(labels, task, num_classes)
+    if n < min_samples_split:
+        return __make_leaf(labels, task, num_classes)
+    if task == "classification":
+        if __gini(labels, num_classes) == 0:
+            return __make_leaf(labels, task, num_classes)
+    else:
+        if __variance(labels) == 0:
+            return __make_leaf(labels, task, num_classes)
+
+    let feature_count = len(rows[0])
+    let features = __sample_features(feature_count, max_features, rng)
+    let best = __best_split(rows, labels, features, task, num_classes, min_samples_leaf)
+    if best == nil:
+        return __make_leaf(labels, task, num_classes)
+
+    let left_rows = best["left_rows"]
+    let right_rows = best["right_rows"]
+    let left_labels = best["left_labels"]
+    let right_labels = best["right_labels"]
+    if len(left_labels) == 0 or len(right_labels) == 0:
+        return __make_leaf(labels, task, num_classes)
+
+    let left = __build_tree(left_rows, left_labels, depth + 1, rng, task, num_classes, max_depth, min_samples_split, min_samples_leaf, max_features)
+    let right = __build_tree(right_rows, right_labels, depth + 1, rng, task, num_classes, max_depth, min_samples_split, min_samples_leaf, max_features)
+    return {"leaf": false, "feature": best["feature"], "threshold": best["threshold"], "left": left, "right": right}
+
+fn __best_split(rows, labels, features, task: String, num_classes: Int, min_samples_leaf: Int):
+    let n = len(labels)
+    if n == 0:
+        return nil
+    var base = __variance(labels)
+    if task == "classification":
+        base = __gini(labels, num_classes)
+    var best_impurity = base
+    var best_feature = -1
+    var best_threshold = nil
+    var best_left_rows = nil
+    var best_right_rows = nil
+    var best_left_labels = nil
+    var best_right_labels = nil
+
+    for f in features:
+        let values = []
+        var i = 0
+        while i < n:
+            values.push(float(rows[i][f]))
+            i += 1
+        let uniques = __unique_sorted(values)
+        if len(uniques) <= 1:
+            continue
+        var t_idx = 0
+        while t_idx < len(uniques) - 1:
+            let threshold = (uniques[t_idx] + uniques[t_idx + 1]) / 2.0
+            let split = __split(rows, labels, f, threshold)
+            let left_labels = split["left_labels"]
+            let right_labels = split["right_labels"]
+            if len(left_labels) < min_samples_leaf or len(right_labels) < min_samples_leaf:
+                t_idx += 1
+                continue
+            var left_imp = __variance(left_labels)
+            var right_imp = __variance(right_labels)
+            if task == "classification":
+                left_imp = __gini(left_labels, num_classes)
+                right_imp = __gini(right_labels, num_classes)
+            let weighted = (left_imp * len(left_labels) + right_imp * len(right_labels)) / n
+            if weighted + EPS < best_impurity:
+                best_impurity = weighted
+                best_feature = f
+                best_threshold = threshold
+                best_left_rows = split["left_rows"]
+                best_right_rows = split["right_rows"]
+                best_left_labels = left_labels
+                best_right_labels = right_labels
+            t_idx += 1
+    if best_feature < 0:
+        return nil
+    return {"feature": best_feature, "threshold": best_threshold, "left_rows": best_left_rows, "right_rows": best_right_rows, "left_labels": best_left_labels, "right_labels": best_right_labels}
+
+fn __split(rows, labels, feature: Int, threshold: Float64):
+    let left_rows = []
+    let right_rows = []
+    let left_labels = []
+    let right_labels = []
+    var i = 0
+    while i < len(rows):
+        let v = float(rows[i][feature])
+        if v <= threshold:
+            left_rows.push(rows[i])
+            left_labels.push(labels[i])
+        else:
+            right_rows.push(rows[i])
+            right_labels.push(labels[i])
+        i += 1
+    return {"left_rows": left_rows, "right_rows": right_rows, "left_labels": left_labels, "right_labels": right_labels}
+
+fn __make_leaf(labels, task: String, num_classes: Int):
+    if task == "classification":
+        let counts = __class_counts(labels, num_classes)
+        let total = len(labels)
+        let proba = []
+        var i = 0
+        while i < num_classes:
+            if total == 0:
+                proba.push(0.0)
+            else:
+                proba.push(counts[i] / total)
+            i += 1
+        let value = __argmax(counts)
+        return {"leaf": true, "value": value, "proba": proba, "n": total}
+    let mean_val = __mean(labels)
+    return {"leaf": true, "value": mean_val, "n": len(labels)}
+
+fn __predict_row(node, row, task: String):
+    let cur = node
+    while cur["leaf"] != true:
+        let f = cur["feature"]
+        let t = cur["threshold"]
+        if float(row[f]) <= t:
+            cur = cur["left"]
+        else:
+            cur = cur["right"]
+    return cur["value"]
+
+fn __predict_proba_row(node, row, num_classes: Int):
+    let cur = node
+    while cur["leaf"] != true:
+        let f = cur["feature"]
+        let t = cur["threshold"]
+        if float(row[f]) <= t:
+            cur = cur["left"]
+        else:
+            cur = cur["right"]
+    let p = cur["proba"]
+    if p == nil:
+        let out = []
+        var i = 0
+        while i < num_classes:
+            out.push(0.0)
+            i += 1
+        return out
+    return p
+
+fn __class_counts(labels, num_classes: Int):
+    let counts = []
+    var i = 0
+    while i < num_classes:
+        counts.push(0.0)
+        i += 1
+    for v in labels:
+        let idx = int(v)
+        counts[idx] = counts[idx] + 1.0
+    return counts
+
+fn __gini(labels, num_classes: Int):
+    let n = len(labels)
+    if n == 0:
+        return 0.0
+    let counts = __class_counts(labels, num_classes)
+    var sum_sq = 0.0
+    for c in counts:
+        let p = c / n
+        sum_sq += p * p
+    return 1.0 - sum_sq
+
+fn __variance(values):
+    let n = len(values)
+    if n == 0:
+        return 0.0
+    let mean_val = __mean(values)
+    var acc = 0.0
+    for v in values:
+        let d = float(v) - mean_val
+        acc += d * d
+    return acc / n
+
+fn __mean(values):
+    if len(values) == 0:
+        return 0.0
+    var sum = 0.0
+    for v in values:
+        sum += float(v)
+    return sum / len(values)
+
+fn __unique_sorted(values):
+    let arr = sort(values)
+    if len(arr) == 0:
+        return []
+    let out = [arr[0]]
+    var i = 1
+    while i < len(arr):
+        if arr[i] != arr[i - 1]:
+            out.push(arr[i])
+        i += 1
+    return out
+
+fn __sample_features(feature_count: Int, max_features, rng):
+    if feature_count <= 0:
+        return []
+    var k = feature_count
+    if max_features != nil:
+        let raw = float(max_features)
+        if raw > 1:
+            k = int(raw)
+        elif raw > 0 and raw <= 1:
+            k = int(feature_count * raw)
+    if k <= 0:
+        k = 1
+    if k > feature_count:
+        k = feature_count
+    if k == feature_count:
+        let features = []
+        var i = 0
+        while i < feature_count:
+            features.push(i)
+            i += 1
+        return features
+    let selected = []
+    let used = {}
+    while len(selected) < k:
+        let idx = math.rand_int(rng, 0, feature_count - 1)
+        if used[idx] != true:
+            used[idx] = true
+            selected.push(idx)
+    return selected
+
+fn __label_list(t, n: Int):
+    if t.rank() == 1:
+        if t.shape()[0] != n:
+            panic("tree targets length mismatch")
+        return t.to_flat_list()
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        return t.flatten().to_flat_list()
+    panic("tree targets must be rank-1 [n] or rank-2 [n,1]")
+
+fn __ensure_class_labels(labels):
+    for v in labels:
+        let iv = int(v)
+        if v != iv or iv < 0:
+            panic("tree classification labels must be non-negative integers")
+
+fn __infer_classes(labels):
+    var best = -1
+    for v in labels:
+        let iv = int(v)
+        if iv > best:
+            best = iv
+    return best + 1
+
+fn __argmax(values):
+    var best_i = 0
+    var best_v = values[0]
+    var i = 1
+    while i < len(values):
+        if values[i] > best_v:
+            best_v = values[i]
+            best_i = i
+        i += 1
+    return best_i
+
+fn __validate_dataset(x, t):
+    if x.rank() != 2:
+        panic("tree expects input rank-2 [n, d]")
+    let n = x.shape()[0]
+    if t.rank() == 1 and t.shape()[0] == n:
+        return
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        return
+    panic("tree targets must be [n] or [n,1]")
+
+fn __serialize_model(model):
+    return {"version": SERIAL_VERSION, "kind": "tree", "task": model.task, "max_depth": model.max_depth, "min_samples_split": model.min_samples_split, "min_samples_leaf": model.min_samples_leaf, "max_features": model.max_features, "seed": model.seed, "num_classes": model.num_classes, "input_dim": model.input_dim, "root": model.root}
+
+fn __deserialize_model(data):
+    if data["kind"] != "tree":
+        panic("tree.deserialize expects kind 'tree'")
+    let task = data["task"]
+    let max_depth = int(data["max_depth"])
+    let min_samples_split = int(data["min_samples_split"])
+    let min_samples_leaf = int(data["min_samples_leaf"])
+    let max_features = data["max_features"]
+    let seed = int(data["seed"])
+    let inst = DecisionTree(task, max_depth, min_samples_split, min_samples_leaf, max_features, seed)
+    inst.num_classes = int(data["num_classes"])
+    inst.input_dim = int(data["input_dim"])
+    inst.root = data["root"]
+    return inst
+
+fn __opt(options, key: String, fallback):
+    if options == nil:
+        return fallback
+    let value = options[key]
+    if value == nil:
+        return fallback
+    return value

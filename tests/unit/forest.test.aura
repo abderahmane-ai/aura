@@ -1,0 +1,27 @@
+import std.test as test
+import std.data.synthetic as synthetic
+import std.tensor as tensor
+import std.ml.forest as forest
+
+fn main():
+    let data = synthetic.multiclass_blobs(3, 90, 2, 0.45, 3.2, 18)
+    let split = synthetic.train_test_split(data["X"], data["y"], 0.25, true, 9)
+
+    let model = forest.model("classification", 25, 6, 2, 1, 0.7, true, 11)
+    model.fit(split["X_train"], split["y_train"])
+    let metrics = model.evaluate(split["X_test"], split["y_test"])
+    test.assert_true(metrics["accuracy"] > 0.85)
+
+    let X = []
+    let y = []
+    var i = 0
+    while i < 80:
+        let v = float(i) / 20.0 - 2.0
+        X.push([v])
+        y.push(v * v)
+        i += 1
+    let reg = forest.model("regression", 20, 6, 2, 1, 1.0, true, 13)
+    reg.fit(tensor.tensor(X), tensor.tensor(y))
+    let preds = reg.predict(tensor.tensor(X))
+    let mse = preds.mse_loss(tensor.tensor(y))
+    test.assert_true(mse < 0.2)

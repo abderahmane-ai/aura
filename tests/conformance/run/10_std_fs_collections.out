@@ -1,4 +1,4 @@
 files=[a.txt, c.txt] walked=[a.txt, c.txt] a_size=7
 c_lines=[one, twothree] bname=z.txt ext=.txt
 u=[1, 2, 3] inter=[2, 3] diff=[1, 3]
-grouped={"1": 2, "0": 2} part=[[2, 4], [1, 3]] pairs=[[a, 1], [b, 2]]
+grouped={"0": 2, "1": 2} part=[[2, 4], [1, 3]] pairs=[[a, 1], [b, 2]]

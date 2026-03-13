@@ -1,0 +1,26 @@
+import std.test as test
+import std.math as math
+import std.tensor as tensor
+import std.ml.metrics as metrics
+
+fn main():
+    let preds = tensor.tensor([0, 1, 1, 0])
+    let target = tensor.tensor([0, 1, 0, 0])
+    let stats = metrics.classification_metrics(preds, target, 2)
+    test.assert_true(math.nearly_eq(stats["accuracy"], 0.75, 0.000001))
+    test.assert_true(math.nearly_eq(stats["precision"], 0.75, 0.000001))
+    test.assert_true(math.nearly_eq(stats["recall"], 0.8333333333, 0.000001))
+    test.assert_true(math.nearly_eq(stats["f1"], 0.7333333333, 0.000001))
+    let conf = stats["confusion"]
+    test.assert_equal(len(conf), 2)
+    test.assert_equal(conf[0][0], 2.0)
+    test.assert_equal(conf[0][1], 1.0)
+    test.assert_equal(conf[1][1], 1.0)
+
+    let pred_r = tensor.tensor([1.0, 2.0, 3.0])
+    let target_r = tensor.tensor([1.0, 2.0, 4.0])
+    let rstats = metrics.regression_metrics(pred_r, target_r)
+    test.assert_true(math.nearly_eq(rstats["mse"], 0.3333333333, 0.000001))
+    test.assert_true(math.nearly_eq(rstats["rmse"], 0.5773502692, 0.000001))
+    test.assert_true(math.nearly_eq(rstats["mae"], 0.3333333333, 0.000001))
+    test.assert_true(math.nearly_eq(rstats["r2"], 0.7857142857, 0.000001))

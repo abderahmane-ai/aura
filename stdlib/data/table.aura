@@ -1,0 +1,189 @@
+module std.data.table
+
+import std.tensor as tensor
+
+class Table:
+    let columns
+    var rows
+    var types
+    var meta
+
+    fn init(columns, rows, types = nil, meta = nil):
+        self.columns = to_list(columns)
+        self.rows = __clone_rows(to_list(rows))
+        if types == nil:
+            self.types = []
+        else:
+            self.types = to_list(types)
+        if meta == nil:
+            self.meta = {}
+        else:
+            self.meta = meta
+
+    fn clone():
+        return Table(self.columns, self.rows, self.types, self.meta)
+
+    fn shape():
+        return [len(self.rows), len(self.columns)]
+
+    fn head(n: Int = 5):
+        return Table(self.columns, __slice_rows(self.rows, n), self.types, self.meta)
+
+    fn select_cols(cols):
+        return __select_table(self, cols)
+
+    fn drop_cols(cols):
+        return __drop_table(self, cols)
+
+    fn rename(mapping):
+        return __rename_table(self, mapping)
+
+    fn column(name: String):
+        return __column(self, name)
+
+    fn with_column(name: String, values):
+        return __with_column(self, name, values)
+
+    fn to_tensors(feature_cols, target_col = nil):
+        return __to_tensors(self, feature_cols, target_col)
+
+fn table(columns, rows, types = nil, meta = nil):
+    return Table(columns, rows, types, meta)
+
+fn from_rows(columns, rows, types = nil, meta = nil):
+    return Table(columns, rows, types, meta)
+
+fn __clone_rows(rows):
+    let out = []
+    for row in rows:
+        out.push(to_list(row))
+    return out
+
+fn __slice_rows(rows, n: Int):
+    let out = []
+    var i = 0
+    let limit = min(len(rows), n)
+    while i < limit:
+        out.push(to_list(rows[i]))
+        i += 1
+    return out
+
+fn __col_index(tbl, name: String):
+    var i = 0
+    while i < len(tbl.columns):
+        if tbl.columns[i] == name:
+            return i
+        i += 1
+    panic("table column '{name}' not found")
+
+fn __select_indices(tbl, cols):
+    let out = []
+    for name in to_list(cols):
+        out.push(__col_index(tbl, name))
+    return out
+
+fn __select_table(tbl, cols):
+    let indices = __select_indices(tbl, cols)
+    let out_rows = []
+    for row in tbl.rows:
+        let next = []
+        for idx in indices:
+            next.push(row[idx])
+        out_rows.push(next)
+    let out_cols = []
+    for idx in indices:
+        out_cols.push(tbl.columns[idx])
+    return Table(out_cols, out_rows, [], tbl.meta)
+
+fn __drop_table(tbl, cols):
+    let drop = {}
+    for name in to_list(cols):
+        drop[name] = true
+    let keep_indices = []
+    var i = 0
+    while i < len(tbl.columns):
+        if drop[tbl.columns[i]] != true:
+            keep_indices.push(i)
+        i += 1
+    let out_rows = []
+    for row in tbl.rows:
+        let next = []
+        for idx in keep_indices:
+            next.push(row[idx])
+        out_rows.push(next)
+    let out_cols = []
+    for idx in keep_indices:
+        out_cols.push(tbl.columns[idx])
+    return Table(out_cols, out_rows, [], tbl.meta)
+
+fn __rename_table(tbl, mapping):
+    let out_cols = []
+    for name in tbl.columns:
+        let mapped = mapping[name]
+        if mapped == nil:
+            out_cols.push(name)
+        else:
+            out_cols.push(mapped)
+    return Table(out_cols, tbl.rows, tbl.types, tbl.meta)
+
+fn __column(tbl, name: String):
+    let idx = __col_index(tbl, name)
+    let out = []
+    for row in tbl.rows:
+        out.push(row[idx])
+    return out
+
+fn __with_column(tbl, name: String, values):
+    let vals = to_list(values)
+    if len(vals) != len(tbl.rows):
+        panic("table.with_column expects values length to match rows")
+    let out_cols = to_list(tbl.columns)
+    let out_rows = []
+    let idx = -1
+    var i = 0
+    while i < len(out_cols):
+        if out_cols[i] == name:
+            idx = i
+            break
+        i += 1
+    if idx < 0:
+        out_cols.push(name)
+        i = 0
+        while i < len(tbl.rows):
+            let row = to_list(tbl.rows[i])
+            row.push(vals[i])
+            out_rows.push(row)
+            i += 1
+        return Table(out_cols, out_rows, [], tbl.meta)
+    i = 0
+    while i < len(tbl.rows):
+        let row = to_list(tbl.rows[i])
+        row[idx] = vals[i]
+        out_rows.push(row)
+        i += 1
+    return Table(out_cols, out_rows, [], tbl.meta)
+
+fn __to_tensors(tbl, feature_cols, target_col = nil):
+    let indices = __select_indices(tbl, feature_cols)
+    let x_rows = []
+    let y_rows = []
+    var target_idx = -1
+    if target_col != nil:
+        target_idx = __col_index(tbl, target_col)
+    for row in tbl.rows:
+        let next = []
+        for idx in indices:
+            next.push(__as_float(row[idx]))
+        x_rows.push(next)
+        if target_idx >= 0:
+            y_rows.push(__as_float(row[target_idx]))
+    if target_idx >= 0:
+        return {"X": tensor.tensor(x_rows), "y": tensor.tensor(y_rows)}
+    return {"X": tensor.tensor(x_rows)}
+
+fn __as_float(value):
+    if value == nil:
+        panic("table.to_tensors found nil value; impute or drop missing data")
+    if value == "":
+        panic("table.to_tensors found empty string; impute or drop missing data")
+    return float(value)

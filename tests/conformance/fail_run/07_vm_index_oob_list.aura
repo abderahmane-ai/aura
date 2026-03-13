@@ -1,0 +1,3 @@
+fn main():
+    let xs = [1]
+    let y = xs[2]

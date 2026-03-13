@@ -1,0 +1,30 @@
+import std.test as test
+import std.data.synthetic as synthetic
+import std.tensor as tensor
+import std.ml.knn as knn
+
+fn main():
+    let data = synthetic.multiclass_blobs(3, 70, 2, 0.5, 3.0, 14)
+    let split = synthetic.train_test_split(data["X"], data["y"], 0.25, true, 8)
+
+    let model = knn.model(5, "classification", "distance")
+    model.fit(split["X_train"], split["y_train"])
+
+    let metrics = model.evaluate(split["X_test"], split["y_test"])
+    test.assert_true(metrics["accuracy"] > 0.8)
+
+    let X = []
+    let y = []
+    var i = 0
+    while i < 40:
+        let x = float(i) / 10.0
+        X.push([x])
+        y.push(2.0 * x + 1.0)
+        i += 1
+    let X_t = tensor.tensor(X)
+    let y_t = tensor.tensor(y)
+
+    let reg = knn.model(1, "regression", "uniform")
+    reg.fit(X_t, y_t)
+    let reg_metrics = reg.evaluate(X_t, y_t)
+    test.assert_true(reg_metrics["mse"] < 0.0000001)

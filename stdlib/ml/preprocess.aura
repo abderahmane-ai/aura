@@ -1,0 +1,425 @@
+module std.ml.preprocess
+
+import std.data.table as table
+import std.tensor as tensor
+
+class Imputer:
+    let kind: String
+    let columns
+    let strategy: String
+    let fill_value
+    var fills
+
+    fn init(columns = nil, strategy: String = "mean", fill_value = nil):
+        self.kind = "imputer"
+        self.columns = columns
+        self.strategy = strategy
+        self.fill_value = fill_value
+        self.fills = {}
+
+    fn fit(tbl):
+        let cols = __columns_or_all(tbl, self.columns)
+        for name in cols:
+            let values = __col_values(tbl, name)
+            let fill = nil
+            if self.strategy == "mean":
+                fill = __mean(values)
+            elif self.strategy == "median":
+                fill = __median(values)
+            elif self.strategy == "mode":
+                fill = __mode(values)
+            elif self.strategy == "constant":
+                fill = self.fill_value
+            else:
+                panic("imputer strategy must be mean, median, mode, or constant")
+            self.fills[name] = fill
+        return self
+
+    fn transform(tbl):
+        let cols = __columns_or_all(tbl, self.columns)
+        let indices = []
+        for name in cols:
+            indices.push(__col_index(tbl, name))
+        let out_rows = []
+        for row in tbl.rows:
+            let next = to_list(row)
+            var i = 0
+            while i < len(cols):
+                let idx = indices[i]
+                let name = cols[i]
+                let fill = self.fills[name]
+                let val = next[idx]
+                if val == nil or val == "":
+                    next[idx] = fill
+                i += 1
+            out_rows.push(next)
+        return table.table(tbl.columns, out_rows, tbl.types, tbl.meta)
+
+    fn state():
+        return {"kind": self.kind, "columns": self.columns, "strategy": self.strategy, "fill_value": self.fill_value, "fills": self.fills}
+
+fn imputer(columns = nil, strategy: String = "mean", fill_value = nil):
+    return Imputer(columns, strategy, fill_value)
+
+class StandardScaler:
+    let kind: String
+    let columns
+    var means
+    var stds
+
+    fn init(columns = nil):
+        self.kind = "standard_scaler"
+        self.columns = columns
+        self.means = {}
+        self.stds = {}
+
+    fn fit(tbl):
+        let cols = __columns_or_all(tbl, self.columns)
+        for name in cols:
+            let values = __col_values(tbl, name)
+            let mu = __mean(values)
+            let st = __std(values)
+            if st == 0:
+                st = 1.0
+            self.means[name] = mu
+            self.stds[name] = st
+        return self
+
+    fn transform(tbl):
+        let cols = __columns_or_all(tbl, self.columns)
+        let indices = []
+        for name in cols:
+            indices.push(__col_index(tbl, name))
+        let out_rows = []
+        for row in tbl.rows:
+            let next = to_list(row)
+            var i = 0
+            while i < len(cols):
+                let idx = indices[i]
+                let name = cols[i]
+                let val = next[idx]
+                if val != nil and val != "":
+                    next[idx] = (float(val) - self.means[name]) / self.stds[name]
+                i += 1
+            out_rows.push(next)
+        return table.table(tbl.columns, out_rows, tbl.types, tbl.meta)
+
+    fn state():
+        return {"kind": self.kind, "columns": self.columns, "means": self.means, "stds": self.stds}
+
+fn standard_scaler(columns = nil):
+    return StandardScaler(columns)
+
+class MinMaxScaler:
+    let kind: String
+    let columns
+    var mins
+    var maxs
+
+    fn init(columns = nil):
+        self.kind = "minmax_scaler"
+        self.columns = columns
+        self.mins = {}
+        self.maxs = {}
+
+    fn fit(tbl):
+        let cols = __columns_or_all(tbl, self.columns)
+        for name in cols:
+            let values = __col_values(tbl, name)
+            let mm = __minmax(values)
+            self.mins[name] = mm[0]
+            self.maxs[name] = mm[1]
+        return self
+
+    fn transform(tbl):
+        let cols = __columns_or_all(tbl, self.columns)
+        let indices = []
+        for name in cols:
+            indices.push(__col_index(tbl, name))
+        let out_rows = []
+        for row in tbl.rows:
+            let next = to_list(row)
+            var i = 0
+            while i < len(cols):
+                let idx = indices[i]
+                let name = cols[i]
+                let val = next[idx]
+                if val != nil and val != "":
+                    let lo = self.mins[name]
+                    let hi = self.maxs[name]
+                    if hi == lo:
+                        next[idx] = 0.0
+                    else:
+                        next[idx] = (float(val) - lo) / (hi - lo)
+                i += 1
+            out_rows.push(next)
+        return table.table(tbl.columns, out_rows, tbl.types, tbl.meta)
+
+    fn state():
+        return {"kind": self.kind, "columns": self.columns, "mins": self.mins, "maxs": self.maxs}
+
+fn minmax_scaler(columns = nil):
+    return MinMaxScaler(columns)
+
+class LabelEncoder:
+    let kind: String
+    let column: String
+    var mapping
+
+    fn init(column: String):
+        self.kind = "label_encoder"
+        self.column = column
+        self.mapping = {}
+
+    fn fit(tbl):
+        let values = __col_values_raw(tbl, self.column)
+        var next = 0
+        for v in values:
+            let key = str(v)
+            if self.mapping[key] == nil:
+                self.mapping[key] = next
+                next += 1
+        return self
+
+    fn transform(tbl):
+        let col = self.column
+        let idx = __col_index(tbl, col)
+        let out_rows = []
+        for row in tbl.rows:
+            let next = to_list(row)
+            let val = next[idx]
+            if val != nil and val != "":
+                let key = str(val)
+                let mapped = self.mapping[key]
+                if mapped == nil:
+                    panic("label encoder unknown value '{key}'")
+                next[idx] = mapped
+            out_rows.push(next)
+        return table.table(tbl.columns, out_rows, tbl.types, tbl.meta)
+
+    fn state():
+        return {"kind": self.kind, "column": self.column, "mapping": self.mapping}
+
+fn label_encoder(column: String):
+    return LabelEncoder(column)
+
+class OneHotEncoder:
+    let kind: String
+    let columns
+    var categories
+
+    fn init(columns):
+        self.kind = "one_hot_encoder"
+        self.columns = columns
+        self.categories = {}
+
+    fn fit(tbl):
+        let cols = __columns_or_all(tbl, self.columns)
+        for name in cols:
+            let values = __col_values_raw(tbl, name)
+            let cats = []
+            let seen = {}
+            for v in values:
+                let key = str(v)
+                if seen[key] != true:
+                    seen[key] = true
+                    cats.push(key)
+            self.categories[name] = cats
+        return self
+
+    fn transform(tbl):
+        let cols = __columns_or_all(tbl, self.columns)
+        let base_cols = []
+        for name in tbl.columns:
+            if not __contains(cols, name):
+                base_cols.push(name)
+        let new_cols = to_list(base_cols)
+        for name in cols:
+            for cat in self.categories[name]:
+                new_cols.push("{name}={cat}")
+        let out_rows = []
+        for row in tbl.rows:
+            let next = []
+            for name in base_cols:
+                let idx = __col_index(tbl, name)
+                next.push(row[idx])
+            for name in cols:
+                let idx = __col_index(tbl, name)
+                let key = str(row[idx])
+                for cat in self.categories[name]:
+                    if key == cat:
+                        next.push(1.0)
+                    else:
+                        next.push(0.0)
+            out_rows.push(next)
+        return table.table(new_cols, out_rows)
+
+    fn state():
+        return {"kind": self.kind, "columns": self.columns, "categories": self.categories}
+
+fn one_hot_encoder(columns):
+    return OneHotEncoder(columns)
+
+fn serialize(step):
+    if step == nil:
+        panic("preprocess.serialize expects a step")
+    let kind = step.kind
+    if kind == "imputer":
+        return step.state()
+    if kind == "standard_scaler":
+        return step.state()
+    if kind == "minmax_scaler":
+        return step.state()
+    if kind == "label_encoder":
+        return step.state()
+    if kind == "one_hot_encoder":
+        return step.state()
+    panic("preprocess.serialize unknown step kind '{kind}'")
+
+fn deserialize(data):
+    let kind = data["kind"]
+    if kind == "imputer":
+        let obj = Imputer(data["columns"], data["strategy"], data["fill_value"])
+        obj.fills = data["fills"]
+        return obj
+    if kind == "standard_scaler":
+        let obj = StandardScaler(data["columns"])
+        obj.means = data["means"]
+        obj.stds = data["stds"]
+        return obj
+    if kind == "minmax_scaler":
+        let obj = MinMaxScaler(data["columns"])
+        obj.mins = data["mins"]
+        obj.maxs = data["maxs"]
+        return obj
+    if kind == "label_encoder":
+        let obj = LabelEncoder(data["column"])
+        obj.mapping = data["mapping"]
+        return obj
+    if kind == "one_hot_encoder":
+        let obj = OneHotEncoder(data["columns"])
+        obj.categories = data["categories"]
+        return obj
+    panic("preprocess.deserialize unknown step kind '{kind}'")
+
+fn __columns_or_all(tbl, columns):
+    if columns == nil:
+        return to_list(tbl.columns)
+    return to_list(columns)
+
+fn __is_missing(val):
+    if val == nil:
+        return true
+    if val == "":
+        return true
+    return false
+
+fn __col_index(tbl, name: String):
+    var i = 0
+    while i < len(tbl.columns):
+        if tbl.columns[i] == name:
+            return i
+        i += 1
+    panic("column '{name}' not found")
+
+fn __col_values(tbl, name: String):
+    let idx = __col_index(tbl, name)
+    let out = []
+    for row in tbl.rows:
+        let v = row[idx]
+        if __is_missing(v):
+            continue
+        out.push(float(v))
+    return out
+
+fn __col_values_raw(tbl, name: String):
+    let idx = __col_index(tbl, name)
+    let out = []
+    for row in tbl.rows:
+        let v = row[idx]
+        if __is_missing(v):
+            continue
+        out.push(v)
+    return out
+
+fn __apply_columns(tbl, cols, fn_ref):
+    let indices = []
+    for name in cols:
+        indices.push(__col_index(tbl, name))
+    let out_rows = []
+    for row in tbl.rows:
+        let next = to_list(row)
+        var i = 0
+        while i < len(cols):
+            let idx = indices[i]
+            let name = cols[i]
+            next[idx] = fn_ref(next[idx], name)
+            i += 1
+        out_rows.push(next)
+    return table.table(tbl.columns, out_rows, tbl.types, tbl.meta)
+
+fn __mean(values):
+    if len(values) == 0:
+        return 0.0
+    var sum = 0.0
+    for v in values:
+        sum += float(v)
+    return sum / len(values)
+
+fn __median(values):
+    if len(values) == 0:
+        return 0.0
+    let arr = sort(values)
+    let n = len(arr)
+    if n % 2 == 1:
+        return float(arr[int(n / 2)])
+    let a = float(arr[int(n / 2) - 1])
+    let b = float(arr[int(n / 2)])
+    return (a + b) / 2.0
+
+fn __mode(values):
+    if len(values) == 0:
+        return 0.0
+    let counts = {}
+    let best = values[0]
+    var best_count = -1
+    for v in values:
+        let key = str(v)
+        let count = counts[key]
+        if count == nil:
+            count = 0
+        count += 1
+        counts[key] = count
+        if count > best_count:
+            best_count = count
+            best = v
+    return best
+
+fn __minmax(values):
+    if len(values) == 0:
+        return [0.0, 0.0]
+    var lo = float(values[0])
+    var hi = float(values[0])
+    for v in values:
+        let x = float(v)
+        if x < lo:
+            lo = x
+        if x > hi:
+            hi = x
+    return [lo, hi]
+
+fn __std(values):
+    if len(values) == 0:
+        return 1.0
+    let mu = __mean(values)
+    var acc = 0.0
+    for v in values:
+        let d = float(v) - mu
+        acc += d * d
+    return (acc / len(values)) ** 0.5
+
+fn __contains(values, name: String):
+    for v in values:
+        if v == name:
+            return true
+    return false

@@ -1,0 +1,31 @@
+import std.test as test
+import std.data.synthetic as synthetic
+import std.ml.svm as svm
+
+fn main():
+    let data = synthetic.binary_linear(320, 4, 0.08, 7)
+    let split = synthetic.train_test_split(data["X"], data["y"], 0.25, true, 9)
+
+    let model = svm.model(4, 1)
+    let opts = {"epochs": 240, "lr": 0.05, "batch_size": 32, "seed": 7, "c": 3.0}
+    let fit = model.fit(split["X_train"], split["y_train"], opts)
+
+    let metrics = model.evaluate(split["X_test"], split["y_test"])
+    let hist = fit["history"]["loss"]
+    test.assert_true(hist[0] > hist[len(hist) - 1])
+    test.assert_true(metrics["loss"] >= 0)
+
+    let preds = model.predict(split["X_test"])
+    test.assert_equal(preds.shape()[0], split["X_test"].shape()[0])
+
+    let data_mc = synthetic.multiclass_blobs(3, 80, 2, 0.45, 3.2, 21)
+    let split_mc = synthetic.train_test_split(data_mc["X"], data_mc["y"], 0.2, true, 5)
+
+    let model_mc = svm.model(2, 3)
+    let opts_mc = {"epochs": 220, "lr": 0.04, "batch_size": 64, "seed": 5, "c": 2.0}
+    let fit_mc = model_mc.fit(split_mc["X_train"], split_mc["y_train"], opts_mc)
+
+    let metrics_mc = model_mc.evaluate(split_mc["X_test"], split_mc["y_test"])
+    let hist_mc = fit_mc["history"]["loss"]
+    test.assert_true(len(hist_mc) > 0)
+    test.assert_true(metrics_mc["loss"] >= 0)

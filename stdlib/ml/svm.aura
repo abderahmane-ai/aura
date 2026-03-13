@@ -1,0 +1,534 @@
+module std.ml.svm
+
+import std.tensor as tensor
+import std.optim as optim
+import std.math as math
+import std.ml.metrics as metrics
+import std.fs as fs
+
+let DEFAULT_L2 = 0.001
+let DEFAULT_C = 1.0
+let SERIAL_VERSION = 1
+
+class SVM:
+    let kind: String
+    let input_dim: Int
+    let num_classes: Int
+    var W
+    var b
+
+    fn init(input_dim: Int, num_classes: Int = 1):
+        if input_dim <= 0:
+            panic("svm.SVM expects input_dim > 0")
+        self.kind = "svm"
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        if num_classes <= 1:
+            self.W = tensor.zeros([input_dim])
+            self.b = tensor.zeros([1])
+        else:
+            self.W = tensor.zeros([input_dim, num_classes])
+            self.b = tensor.zeros([num_classes])
+
+    fn clone():
+        let copy = SVM(self.input_dim, self.num_classes)
+        copy.W = self.W.clone()
+        copy.b = self.b.clone()
+        return copy
+
+    fn scores(X):
+        return scores(__class_model(self), X)
+
+    fn predict(X):
+        return predict(__class_model(self), X)
+
+    fn predict_proba(X):
+        return predict_proba(__class_model(self), X)
+
+    fn loss(X, y, l2: Float64 = DEFAULT_L2, c: Float64 = DEFAULT_C):
+        return loss(__class_model(self), X, y, l2, c)
+
+    fn evaluate(X, y, l2: Float64 = DEFAULT_L2, c: Float64 = DEFAULT_C):
+        return evaluate(__class_model(self), X, y, l2, c)
+
+    fn fit(X, y, options = {}):
+        let model = __class_model(self)
+        let result = fit(model, X, y, options)
+        self.W = model["W"]
+        self.b = model["b"]
+        return result
+
+    fn state():
+        return __serialize_model(__class_model(self))
+
+    fn save(path: String):
+        let data = self.state()
+        fs.write_json(path, data)
+        return path
+
+fn model(input_dim: Int, num_classes: Int = 1):
+    return SVM(input_dim, num_classes)
+
+fn save(model, path: String):
+    let data = __serialize_model(model)
+    fs.write_json(path, data)
+    return path
+
+fn serialize(model):
+    return model.state()
+
+fn load(path: String):
+    let data = fs.read_json(path)
+    return deserialize(data)
+
+fn deserialize(data):
+    return __deserialize_model(data)
+
+fn init(input_dim: Int, num_classes: Int = 1):
+    if input_dim <= 0:
+        panic("svm.init expects input_dim > 0")
+    if num_classes <= 1:
+        return {"input_dim": input_dim, "num_classes": 1, "W": tensor.zeros([input_dim]), "b": tensor.zeros([1])}
+    return {"input_dim": input_dim, "num_classes": num_classes, "W": tensor.zeros([input_dim, num_classes]), "b": tensor.zeros([num_classes])}
+
+fn clone_model(model):
+    return {"input_dim": model["input_dim"], "num_classes": model["num_classes"], "W": model["W"].clone(), "b": model["b"].clone()}
+
+fn scores(model, X):
+    let x = tensor.tensor(X)
+    __validate_input_shape(model, x)
+    return x.matmul(model["W"]).add(model["b"])
+
+fn predict_proba(model, X):
+    let z = scores(model, X)
+    if model["num_classes"] == 1:
+        return z.sigmoid()
+    return z.softmax(1)
+
+fn predict(model, X):
+    let z = scores(model, X)
+    if model["num_classes"] == 1:
+        let values = z.to_flat_list()
+        let out = []
+        var i = 0
+        while i < len(values):
+            if values[i] >= 0:
+                out.push(1.0)
+            else:
+                out.push(0.0)
+            i += 1
+        return tensor.tensor(out)
+    let rows = z.to_list()
+    let out = []
+    var i = 0
+    while i < len(rows):
+        out.push(__argmax_row(rows[i]))
+        i += 1
+    return tensor.tensor(out)
+
+fn loss(model, X, y, l2: Float64 = DEFAULT_L2, c: Float64 = DEFAULT_C):
+    var l2v = l2
+    if l2v == nil:
+        l2v = DEFAULT_L2
+    var cv = c
+    if cv == nil:
+        cv = DEFAULT_C
+    let x = tensor.tensor(X)
+    let t = tensor.tensor(y)
+    __validate_dataset_for_model(model, x, t)
+    let base = __hinge_loss(model, x, t, cv)
+    return base + __l2_penalty(model["W"], l2v)
+
+fn evaluate(model, X, y, l2: Float64 = DEFAULT_L2, c: Float64 = DEFAULT_C):
+    var l2v = l2
+    if l2v == nil:
+        l2v = DEFAULT_L2
+    var cv = c
+    if cv == nil:
+        cv = DEFAULT_C
+    let x = tensor.tensor(X)
+    let t = tensor.tensor(y)
+    __validate_dataset_for_model(model, x, t)
+    let p = predict(model, x)
+    let base = __hinge_loss(model, x, t, cv)
+    var classes = model["num_classes"]
+    if classes <= 1:
+        classes = 2
+    let stats = metrics.classification_metrics(p, t, classes)
+    stats["loss"] = base + __l2_penalty(model["W"], l2v)
+    return stats
+
+fn fit(model, X, y, options = {}):
+    let x = tensor.tensor(X)
+    let t = tensor.tensor(y)
+    __validate_dataset_for_model(model, x, t)
+
+    let n = x.shape()[0]
+    var epochs = int(__opt(options, "epochs", 200))
+    if epochs <= 0:
+        panic("svm.fit expects epochs > 0")
+
+    var batch_size = int(__opt(options, "batch_size", 0))
+    if batch_size <= 0 or batch_size > n:
+        batch_size = n
+
+    let shuffle = __opt(options, "shuffle", true) == true
+    let l2 = float(__opt(options, "l2", DEFAULT_L2))
+    let c = float(__opt(options, "c", DEFAULT_C))
+    let verbose = __opt(options, "verbose", false) == true
+    var log_every = int(__opt(options, "log_every", 10))
+    if log_every <= 0:
+        log_every = 1
+
+    let clip_norm = __opt(options, "clip_norm", nil)
+    let clip_value = __opt(options, "clip_value", nil)
+    let grad_scale = float(__opt(options, "grad_scale", 1.0))
+
+    var seed = int(__opt(options, "seed", 42))
+    var opt = __opt(options, "optimizer", nil)
+    let lr_opt = __opt(options, "lr", nil)
+    if opt == nil:
+        var init_lr = 0.05
+        if lr_opt != nil:
+            init_lr = float(lr_opt)
+        opt = optim.sgd(init_lr)
+    elif lr_opt != nil:
+        optim.set_lr(opt, float(lr_opt))
+
+    let x_rows = x.to_list()
+    let y_rows = t.to_list()
+    let y_rank = t.rank()
+
+    let history = {"loss": [], "accuracy": []}
+
+    var epoch = 0
+    while epoch < epochs:
+        let indices = __indices(n, shuffle, seed + epoch)
+        var start = 0
+        while start < n:
+            let stop = min(n, start + batch_size)
+            let batch = __select_batch(x_rows, y_rows, y_rank, indices, start, stop)
+            let grads = __gradients(model, batch["X"], batch["y"], l2, c)
+            optim.step(opt, [model["W"], model["b"]], [grads["dW"], grads["db"]], clip_norm, clip_value, grad_scale)
+            start = stop
+
+        let stats = evaluate(model, x, t, l2, c)
+        history["loss"].push(stats["loss"])
+        history["accuracy"].push(stats["accuracy"])
+
+        if verbose and ((epoch + 1) % log_every == 0 or epoch == 0 or epoch + 1 == epochs):
+            let train_loss = stats["loss"]
+            let train_acc = stats["accuracy"]
+            print("epoch {epoch + 1}/{epochs} loss={train_loss} acc={train_acc}")
+
+        epoch += 1
+
+    return {"model": model, "optimizer": opt, "history": history}
+
+fn __gradients(model, x_batch, y_batch, l2: Float64, c: Float64):
+    if model["num_classes"] == 1:
+        return __gradients_binary(model, x_batch, y_batch, l2, c)
+    return __gradients_multiclass(model, x_batch, y_batch, l2, c)
+
+fn __gradients_binary(model, x_batch, y_batch, l2: Float64, c: Float64):
+    let x = tensor.tensor(x_batch)
+    let t = tensor.tensor(y_batch)
+    __validate_dataset_for_model(model, x, t)
+    let n = x.shape()[0]
+    let w = model["W"]
+
+    let x_rows = x.to_list()
+    let y_vals = __svm_targets(t, n)
+    let scores = x.matmul(w).add(model["b"]).to_flat_list()
+
+    let dW = []
+    var j = 0
+    while j < model["input_dim"]:
+        dW.push(0.0)
+        j += 1
+    var db = 0.0
+
+    var i = 0
+    while i < n:
+        let yi = y_vals[i]
+        let margin = 1.0 - yi * scores[i]
+        if margin > 0:
+            let xi = x_rows[i]
+            j = 0
+            while j < len(xi):
+                dW[j] += -c * yi * float(xi[j])
+                j += 1
+            db += -c * yi
+        i += 1
+
+    j = 0
+    while j < len(dW):
+        dW[j] = dW[j] / n
+        j += 1
+    db = db / n
+
+    let dW_t = tensor.tensor(dW)
+    if l2 != 0:
+        dW_t.add_(w.mul(l2))
+    let db_t = tensor.tensor([db])
+    return {"dW": dW_t, "db": db_t}
+
+fn __gradients_multiclass(model, x_batch, y_batch, l2: Float64, c: Float64):
+    let x = tensor.tensor(x_batch)
+    let t = tensor.tensor(y_batch)
+    __validate_dataset_for_model(model, x, t)
+    let n = x.shape()[0]
+    let d = model["input_dim"]
+    let k = model["num_classes"]
+
+    let x_rows = x.to_list()
+    let y_vals = __label_list(t, n)
+    let w = model["W"]
+    let w_list = w.to_list()
+    let b_list = model["b"].to_flat_list()
+
+    let dW = []
+    var j = 0
+    while j < d:
+        let row = []
+        var cidx = 0
+        while cidx < k:
+            row.push(0.0)
+            cidx += 1
+        dW.push(row)
+        j += 1
+    let db = []
+    var cidx = 0
+    while cidx < k:
+        db.push(0.0)
+        cidx += 1
+
+    var i = 0
+    while i < n:
+        let xi = x_rows[i]
+        let label = y_vals[i]
+        cidx = 0
+        while cidx < k:
+            let yi = __ovr_label(label, cidx)
+            let score = __dot_col(xi, w_list, cidx) + b_list[cidx]
+            let margin = 1.0 - yi * score
+            if margin > 0:
+                j = 0
+                while j < d:
+                    dW[j][cidx] += -c * yi * float(xi[j])
+                    j += 1
+                db[cidx] += -c * yi
+            cidx += 1
+        i += 1
+
+    j = 0
+    while j < d:
+        cidx = 0
+        while cidx < k:
+            dW[j][cidx] = dW[j][cidx] / n
+            cidx += 1
+        j += 1
+    cidx = 0
+    while cidx < k:
+        db[cidx] = db[cidx] / n
+        cidx += 1
+
+    let dW_t = tensor.tensor(dW)
+    if l2 != 0:
+        dW_t.add_(w.mul(l2))
+    let db_t = tensor.tensor(db)
+    return {"dW": dW_t, "db": db_t}
+
+fn __hinge_loss(model, x, t, c: Float64):
+    let n = x.shape()[0]
+    if model["num_classes"] == 1:
+        let y_vals = __svm_targets(t, n)
+        let scores = x.matmul(model["W"]).add(model["b"]).to_flat_list()
+        var acc = 0.0
+        var i = 0
+        while i < n:
+            let margin = 1.0 - y_vals[i] * scores[i]
+            if margin > 0:
+                acc += margin
+            i += 1
+        return (c * acc) / n
+
+    let y_vals = __label_list(t, n)
+    let x_rows = x.to_list()
+    let w_list = model["W"].to_list()
+    let b_list = model["b"].to_flat_list()
+    let k = model["num_classes"]
+    var total = 0.0
+    var i = 0
+    while i < n:
+        let xi = x_rows[i]
+        let label = y_vals[i]
+        var cidx = 0
+        while cidx < k:
+            let yi = __ovr_label(label, cidx)
+            let score = __dot_col(xi, w_list, cidx) + b_list[cidx]
+            let margin = 1.0 - yi * score
+            if margin > 0:
+                total += margin
+            cidx += 1
+        i += 1
+    return (c * total) / (n * k)
+
+fn __svm_targets(t, n: Int):
+    let vals = __label_list(t, n)
+    let out = []
+    for v in vals:
+        let fv = float(v)
+        let iv = int(fv)
+        if fv != iv:
+            panic("svm binary labels must be -1, 0, or 1")
+        if iv == 0:
+            out.push(-1.0)
+        elif iv == 1:
+            out.push(1.0)
+        elif iv == -1:
+            out.push(-1.0)
+        else:
+            panic("svm binary labels must be -1, 0, or 1")
+    return out
+
+fn __label_list(t, n: Int):
+    if t.rank() == 1:
+        if t.shape()[0] != n:
+            panic("svm targets length mismatch")
+        return t.to_flat_list()
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        return t.flatten().to_flat_list()
+    panic("svm targets must be rank-1 [n] or rank-2 [n,1]")
+
+fn __ovr_label(label, class_idx: Int):
+    if int(label) == class_idx:
+        return 1.0
+    return -1.0
+
+fn __accuracy(pred, target, num_classes: Int):
+    let p = tensor.tensor(pred).to_flat_list()
+    let y = __label_list(tensor.tensor(target), len(p))
+    if len(p) == 0:
+        return 0.0
+    var correct = 0
+    var i = 0
+    while i < len(p):
+        let pred_label = int(p[i])
+        let target_label = int(y[i])
+        if num_classes == 1:
+            if target_label == -1:
+                target_label = 0
+        if pred_label == target_label:
+            correct += 1
+        i += 1
+    return correct / len(p)
+
+fn __dot_col(x_row, w_rows, col_idx: Int):
+    var acc = 0.0
+    var j = 0
+    while j < len(x_row):
+        acc += float(x_row[j]) * float(w_rows[j][col_idx])
+        j += 1
+    return acc
+
+fn __validate_input_shape(model, x):
+    if x.rank() != 2:
+        panic("svm expects input rank-2 [n, d]")
+    if x.shape()[1] != model["input_dim"]:
+        panic("svm input_dim mismatch")
+
+fn __validate_dataset_for_model(model, x, t):
+    __validate_input_shape(model, x)
+    let n = x.shape()[0]
+    if t.rank() == 1 and t.shape()[0] == n:
+        if model["num_classes"] > 1:
+            __ensure_multiclass_labels(t.to_flat_list(), model["num_classes"])
+        else:
+            __svm_targets(t, n)
+        return
+    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
+        if model["num_classes"] > 1:
+            __ensure_multiclass_labels(t.flatten().to_flat_list(), model["num_classes"])
+        else:
+            __svm_targets(t.flatten(), n)
+        return
+    panic("svm targets must be [n] or [n,1]")
+
+fn __l2_penalty(w, l2: Float64):
+    if l2 == nil or l2 == 0:
+        return 0.0
+    return 0.5 * l2 * w.mul(w).mean()
+
+fn __argmax_row(row):
+    var best_i = 0
+    var best_v = row[0]
+    var i = 1
+    while i < len(row):
+        if row[i] > best_v:
+            best_v = row[i]
+            best_i = i
+        i += 1
+    return best_i
+
+fn __ensure_multiclass_labels(values, num_classes: Int):
+    for v in values:
+        let iv = int(v)
+        if v != iv or iv < 0 or iv >= num_classes:
+            panic("svm multiclass labels must be integers in [0, num_classes-1]")
+
+fn __indices(n: Int, do_shuffle: Bool, seed: Int):
+    let idx = []
+    var i = 0
+    while i < n:
+        idx.push(i)
+        i += 1
+    if not do_shuffle:
+        return idx
+    let rng = math.rng(seed)
+    return math.shuffle(rng, idx)
+
+fn __select_batch(x_rows, y_rows, y_rank: Int, idx, start: Int, stop: Int):
+    let xb = []
+    let yb = []
+    var i = start
+    while i < stop:
+        let k = idx[i]
+        xb.push(x_rows[k])
+        yb.push(y_rows[k])
+        i += 1
+    if y_rank == 1:
+        return {"X": tensor.tensor(xb), "y": tensor.tensor(yb)}
+    return {"X": tensor.tensor(xb), "y": tensor.tensor(yb)}
+
+fn __class_model(instance):
+    return {"input_dim": instance.input_dim, "num_classes": instance.num_classes, "W": instance.W, "b": instance.b}
+
+fn __opt(options, key: String, fallback):
+    if options == nil:
+        return fallback
+    let value = options[key]
+    if value == nil:
+        return fallback
+    return value
+
+fn __serialize_model(model):
+    return {"version": SERIAL_VERSION, "kind": "svm", "input_dim": model["input_dim"], "num_classes": model["num_classes"], "W": __tensor_state(model["W"]), "b": __tensor_state(model["b"])}
+
+fn __deserialize_model(data):
+    if data["kind"] != "svm":
+        panic("svm.deserialize expects kind 'svm'")
+    let input_dim = int(data["input_dim"])
+    let num_classes = int(data["num_classes"])
+    let inst = SVM(input_dim, num_classes)
+    inst.W = __tensor_from_state(data["W"])
+    inst.b = __tensor_from_state(data["b"])
+    return inst
+
+fn __tensor_state(t):
+    return {"shape": t.shape(), "values": t.to_flat_list()}
+
+fn __tensor_from_state(state):
+    let shape = state["shape"]
+    let values = state["values"]
+    return tensor.tensor(values).reshape(shape)

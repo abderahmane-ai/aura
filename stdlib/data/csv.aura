@@ -1,0 +1,112 @@
+module std.data.csv
+
+import std.fs as fs
+import std.data.table as table
+
+fn read(path: String, options = {}):
+    let text = fs.read_text(path)
+    return parse(text, options)
+
+fn parse(text: String, options = {}):
+    let delimiter = __opt(options, "delimiter", ",")
+    let has_header = __opt(options, "header", true) == true
+    let trim = __opt(options, "trim", true) == true
+    let skip_empty = __opt(options, "skip_empty", true) == true
+
+    let normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    let lines = normalized.split("\n")
+
+    let rows = []
+    var i = 0
+    while i < len(lines):
+        let line = lines[i]
+        if skip_empty and line.trim().len() == 0:
+            i += 1
+            continue
+        let fields = __parse_line(line, delimiter, trim)
+        rows.push(fields)
+        i += 1
+
+    if len(rows) == 0:
+        return table.table([], [])
+
+    if has_header:
+        let cols = rows[0]
+        let data_rows = []
+        var r = 1
+        while r < len(rows):
+            data_rows.push(rows[r])
+            r += 1
+        return table.table(cols, data_rows)
+
+    let columns = __make_columns(len(rows[0]))
+    return table.table(columns, rows)
+
+fn write(path: String, tbl, options = {}):
+    let delimiter = __opt(options, "delimiter", ",")
+    let header = __opt(options, "header", true) == true
+    let lines = []
+    if header:
+        lines.push(__join_row(tbl.columns, delimiter))
+    for row in tbl.rows:
+        lines.push(__join_row(row, delimiter))
+    fs.write_text(path, lines.join("\n"))
+    return path
+
+fn __make_columns(n: Int):
+    let cols = []
+    var i = 0
+    while i < n:
+        cols.push("col_{i}")
+        i += 1
+    return cols
+
+fn __join_row(row, delimiter: String):
+    let out = []
+    for cell in to_list(row):
+        let text = str(cell)
+        if text.contains(delimiter) or text.contains("\"") or text.contains("\n"):
+            let escaped = text.replace("\"", "\"\"")
+            out.push("\"{escaped}\"")
+        else:
+            out.push(text)
+    return out.join(delimiter)
+
+fn __parse_line(line: String, delimiter: String, trim: Bool):
+    let fields = []
+    var cur = ""
+    var i = 0
+    var in_quotes = false
+    while i < line.len():
+        let ch = line.char_at(i)
+        if ch == "\"":
+            if in_quotes and i + 1 < line.len() and line.char_at(i + 1) == "\"":
+                cur += "\""
+                i += 2
+                continue
+            in_quotes = not in_quotes
+            i += 1
+            continue
+        if ch == delimiter and not in_quotes:
+            if trim:
+                fields.push(cur.trim())
+            else:
+                fields.push(cur)
+            cur = ""
+            i += 1
+            continue
+        cur += ch
+        i += 1
+    if trim:
+        fields.push(cur.trim())
+    else:
+        fields.push(cur)
+    return fields
+
+fn __opt(options, key: String, fallback):
+    if options == nil:
+        return fallback
+    let value = options[key]
+    if value == nil:
+        return fallback
+    return value

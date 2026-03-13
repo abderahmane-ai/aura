@@ -1,0 +1,125 @@
+import std.test as test
+import std.fs as fs
+import std.tensor as tensor
+import std.data.synthetic as synthetic
+import std.data.csv as csv
+import std.ml.logistic as logistic
+import std.ml.linear as linear
+import std.ml.svm as svm
+import std.ml.knn as knn
+import std.ml.tree as tree
+import std.ml.forest as forest
+import std.ml.naive_bayes as nb
+import std.ml.pipeline as pipeline
+import std.ml.preprocess as prep
+
+fn assert_shape_equal(a, b):
+    let sa = a.shape()
+    let sb = b.shape()
+    test.assert_equal(len(sa), len(sb))
+    var i = 0
+    while i < len(sa):
+        test.assert_equal(sa[i], sb[i])
+        i += 1
+
+fn assert_tensor_close(a, b, eps: Float64 = 0.000000001):
+    assert_shape_equal(a, b)
+    let av = a.to_flat_list()
+    let bv = b.to_flat_list()
+    test.assert_equal(len(av), len(bv))
+    var i = 0
+    while i < len(av):
+        test.assert_approx(av[i], bv[i], eps)
+        i += 1
+
+fn main():
+    let dir = fs.temp_dir("aura-test-")
+
+    let data = synthetic.binary_linear(60, 3, 0.1, 9)
+    let model = logistic.model(3, 1)
+    model.fit(data["X"], data["y"], {"epochs": 40, "lr": 0.1, "seed": 3})
+    let path_log = fs.join([dir, "logistic.json"])
+    model.save(path_log)
+    let loaded = logistic.load(path_log)
+    assert_tensor_close(model.W, loaded.W)
+    assert_tensor_close(model.b, loaded.b)
+
+    let x_rows = data["X"].to_list()
+    let y = []
+    for row in x_rows:
+        let value = float(row[0]) * 2.0 - float(row[1]) * 0.5 + float(row[2]) * 1.5
+        y.push(value)
+    let y_t = tensor.tensor(y)
+    let lin = linear.ridge(3, 0.001)
+    lin.fit(data["X"], y_t, {"epochs": 60, "lr": 0.05, "seed": 4})
+    let path_lin = fs.join([dir, "linear.json"])
+    lin.save(path_lin)
+    let lin2 = linear.load(path_lin)
+    assert_tensor_close(lin.W, lin2.W)
+    assert_tensor_close(lin.b, lin2.b)
+
+    let svm_model = svm.model(3, 1)
+    svm_model.fit(data["X"], data["y"], {"epochs": 40, "lr": 0.05, "seed": 5})
+    let path_svm = fs.join([dir, "svm.json"])
+    svm_model.save(path_svm)
+    let svm2 = svm.load(path_svm)
+    assert_tensor_close(svm_model.W, svm2.W)
+    assert_tensor_close(svm_model.b, svm2.b)
+
+    let data_mc = synthetic.multiclass_blobs(3, 20, 2, 0.4, 2.5, 10)
+    let knn_model = knn.model(3, "classification", "uniform")
+    knn_model.fit(data_mc["X"], data_mc["y"])
+    let path_knn = fs.join([dir, "knn.json"])
+    knn_model.save(path_knn)
+    let knn2 = knn.load(path_knn)
+    let p1 = knn_model.predict(data_mc["X"]).to_flat_list()
+    let p2 = knn2.predict(data_mc["X"]).to_flat_list()
+    test.assert_equal(len(p1), len(p2))
+    var i = 0
+    while i < len(p1):
+        test.assert_equal(p1[i], p2[i])
+        i += 1
+
+    let text = "age,score,label\n20,10,0\n30,20,1\n25,15,0\n35,30,1\n"
+    let tbl = csv.parse(text)
+    let scaler = prep.standard_scaler(["age", "score"])
+    let pipe_model = logistic.model(2, 1)
+    let pipe = pipeline.pipeline([scaler], pipe_model, "label")
+    pipe.fit(tbl, {"epochs": 40, "lr": 0.2, "seed": 2})
+    let path_pipe = fs.join([dir, "pipeline.json"])
+    pipe.save(path_pipe)
+    let pipe2 = pipeline.load(path_pipe)
+    let preds1 = pipe.predict(tbl).to_flat_list()
+    let preds2 = pipe2.predict(tbl).to_flat_list()
+    test.assert_equal(len(preds1), len(preds2))
+    i = 0
+    while i < len(preds1):
+        test.assert_equal(preds1[i], preds2[i])
+        i += 1
+
+    let tree_model = tree.model("classification", 4, 2, 1, nil, 9)
+    tree_model.fit(data_mc["X"], data_mc["y"])
+    let path_tree = fs.join([dir, "tree.json"])
+    tree_model.save(path_tree)
+    let tree2 = tree.load(path_tree)
+    let t1 = tree_model.predict(data_mc["X"]).to_flat_list()
+    let t2 = tree2.predict(data_mc["X"]).to_flat_list()
+    test.assert_equal(len(t1), len(t2))
+
+    let forest_model = forest.model("classification", 10, 4, 2, 1, 0.7, true, 7)
+    forest_model.fit(data_mc["X"], data_mc["y"])
+    let path_forest = fs.join([dir, "forest.json"])
+    forest_model.save(path_forest)
+    let forest2 = forest.load(path_forest)
+    let f1 = forest_model.predict(data_mc["X"]).to_flat_list()
+    let f2 = forest2.predict(data_mc["X"]).to_flat_list()
+    test.assert_equal(len(f1), len(f2))
+
+    let nb_model = nb.model("gaussian")
+    nb_model.fit(data_mc["X"], data_mc["y"])
+    let path_nb = fs.join([dir, "nb.json"])
+    nb_model.save(path_nb)
+    let nb2 = nb.load(path_nb)
+    let n1 = nb_model.predict(data_mc["X"]).to_flat_list()
+    let n2 = nb2.predict(data_mc["X"]).to_flat_list()
+    test.assert_equal(len(n1), len(n2))

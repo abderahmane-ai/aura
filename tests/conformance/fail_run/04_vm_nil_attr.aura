@@ -1,0 +1,6 @@
+fn crash():
+    let x = nil
+    return x.name
+
+fn main():
+    crash()

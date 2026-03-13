@@ -1,0 +1,9 @@
+fn inner():
+    let xs = [1, 2]
+    return xs[2]
+
+fn middle():
+    return inner()
+
+fn main():
+    middle()

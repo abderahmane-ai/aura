@@ -1,0 +1,5 @@
+import std.tensor as tensor
+
+fn main():
+    let t = tensor.tensor([[1, 2], [3, 4]])
+    t.at(2, 0)
