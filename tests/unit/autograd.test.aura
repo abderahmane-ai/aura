@@ -1,0 +1,36 @@
+import std.test as test
+import std.autograd as autograd
+
+fn main():
+    let x = autograd.variable([2.0, -3.0], true)
+    let y = x.mul(2.0).sum()
+    y.backward()
+    let gx = x.grad.to_flat_list()
+    test.assert_approx(gx[0], 2.0, 0.000001)
+    test.assert_approx(gx[1], 2.0, 0.000001)
+
+    let w = autograd.variable([[1.0, 2.0], [3.0, 4.0]], true)
+    let a = autograd.variable([[1.0, 1.0], [2.0, 0.0]], false)
+    let z = a.matmul(w).sum()
+    z.backward()
+    let gw = w.grad.to_list()
+    test.assert_approx(gw[0][0], 3.0, 0.000001)
+    test.assert_approx(gw[0][1], 3.0, 0.000001)
+    test.assert_approx(gw[1][0], 1.0, 0.000001)
+    test.assert_approx(gw[1][1], 1.0, 0.000001)
+
+    let logits = autograd.variable([0.0, 0.0], true)
+    let bce = autograd.bce_with_logits(logits, [1.0, 0.0])
+    bce.backward()
+    let gb = logits.grad.to_flat_list()
+    test.assert_approx(gb[0], -0.25, 0.000001)
+    test.assert_approx(gb[1], 0.25, 0.000001)
+
+    let cls = autograd.variable([[2.0, 1.0, 0.1]], true)
+    let ce = autograd.cross_entropy_with_logits(cls, [0])
+    ce.backward()
+    let gc = cls.grad.to_list()[0]
+    test.assert_true(gc[0] < 0)
+    test.assert_true(gc[1] > 0)
+    test.assert_true(gc[2] > 0)
+    test.assert_approx(gc[0] + gc[1] + gc[2], 0.0, 0.000001)

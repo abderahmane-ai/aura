@@ -31,6 +31,7 @@ export class Parser {
     private facets = new Map<string, { fields: FieldDef[]; methods: FnDecl[] }>();
     private facetMethodNames = new Map<string, Set<string>>();
     private unitSymbols = new Map<string, { dimension: string; factor: number; base: string }>();
+    private removedSurface = new Set(['async', 'await', 'spawn', 'select', 'struct', 'actor']);
     constructor(private tokens: Token[], private file: string) { }
 
     // ─── Entry ─────────────────────────────────────────────────────────────────
@@ -455,6 +456,7 @@ export class Parser {
     parseFnDecl(_insideClass: boolean, allowDeclOnly = false): FnDecl {
         const line = this.advance().line; // consume 'fn'
         const name = this.expectIdent();
+        this.rejectGenerics('functions');
         const params = this.parseParams();
         let retType: ASTNode | undefined;
         if (this.check('ARROW')) { this.advance(); retType = this.parseTypeExpr(); }
@@ -497,6 +499,7 @@ export class Parser {
     private parseClassDecl(): ClassDecl {
         const line = this.advance().line; // 'class'
         const name = this.expectIdent();
+        this.rejectGenerics('classes');
         this.expect('COLON');
         this.skipNewlines();
         this.expect('INDENT');
@@ -610,6 +613,7 @@ export class Parser {
     private parseEnumDecl(): EnumDecl {
         const line = this.advance().line;
         const name = this.expectIdent();
+        this.rejectGenerics('enums');
         this.expect('COLON');
         this.skipNewlines();
         this.expect('INDENT');
@@ -972,6 +976,7 @@ export class Parser {
             case 'NIL': this.advance(); return { kind: 'NilLit', line: t.line };
             case 'SELF': this.advance(); return { kind: 'SelfExpr', line: t.line };
             case 'IDENT': {
+                this.rejectRemovedWord(t);
                 this.advance();
                 return { kind: 'Ident', name: t.value, line: t.line };
             }
@@ -1114,6 +1119,7 @@ export class Parser {
         } else {
             base = { kind: 'NilLit', line: this.peek().line }; // fallback
         }
+        this.rejectGenerics('types');
         // Optional postfix ?
         if (this.check('QUESTION')) this.advance();
         return base;
@@ -1262,6 +1268,7 @@ export class Parser {
     private expectIdent(): string {
         const t = this.peek();
         if (t.type !== 'IDENT' && t.type !== 'SELF') parseError(`Expected identifier but got '${t.type}' ('${t.value}')`, t, this.file);
+        this.rejectRemovedWord(t);
         return this.advance().value;
     }
     private expectMemberName(): string {
@@ -1271,5 +1278,17 @@ export class Parser {
     }
     private skipNewlines(): void {
         while (this.check('NEWLINE') || this.check('SEMICOLON')) this.advance();
+    }
+
+    private rejectRemovedWord(token: Token): void {
+        if (token.type === 'IDENT' && this.removedSurface.has(token.value)) {
+            parseError(`Unsupported syntax '${token.value}'`, token, this.file);
+        }
+    }
+
+    private rejectGenerics(label: string): void {
+        if (this.check('LT')) {
+            parseError(`Generics are not supported in ${label}`, this.peek(), this.file);
+        }
     }
 }

@@ -1,0 +1,23 @@
+import std.io as io
+import std.optim as optim
+import std.nn as nn
+import std.nn.trainer as trainer
+import std.data.loader as loader
+import std.data.synthetic as synthetic
+
+fn main():
+    let blobs = synthetic.multiclass_blobs(3, 60, 2, 0.6, 3.5, 42)
+    let split = synthetic.train_test_split(blobs["X"], blobs["y"], 0.2, true, 42)
+
+    let train_ds = loader.tensor_dataset(split["X_train"], split["y_train"])
+    let test_ds = loader.tensor_dataset(split["X_test"], split["y_test"])
+    let train_loader = loader.data_loader(train_ds, 32, true, false, 42)
+    let test_loader = loader.data_loader(test_ds, 32, false, false, 42)
+
+    let model = nn.sequential([nn.linear(2, 16), nn.relu(), nn.linear(16, 3)])
+    let fit = trainer.trainer("classification", optim.adam(0.03), nil, nil, {"epochs": 200, "verbose": false, "seed": 42})
+    fit.fit(model, train_loader)
+    let stats = fit.evaluate(model, test_loader)
+    let accuracy = stats["accuracy"]
+    let loss = stats["loss"]
+    io.println("blobs dnn accuracy={accuracy} loss={loss}")

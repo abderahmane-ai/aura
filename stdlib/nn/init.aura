@@ -1,0 +1,46 @@
+module std.nn.init
+
+import std.tensor as tensor
+
+fn zeros_(value):
+    let target = __tensor_ref(value)
+    target.fill_(0.0)
+    __clear_grad(value)
+    return value
+
+fn ones_(value):
+    let target = __tensor_ref(value)
+    target.fill_(1.0)
+    __clear_grad(value)
+    return value
+
+fn xavier_uniform_(value, fan_in: Int, fan_out: Int):
+    return __assign_init(value, tensor.xavier_uniform(__tensor_ref(value).shape(), fan_in, fan_out))
+
+fn xavier_normal_(value, fan_in: Int, fan_out: Int):
+    return __assign_init(value, tensor.xavier_normal(__tensor_ref(value).shape(), fan_in, fan_out))
+
+fn he_uniform_(value, fan_in: Int):
+    return __assign_init(value, tensor.he_uniform(__tensor_ref(value).shape(), fan_in))
+
+fn he_normal_(value, fan_in: Int):
+    return __assign_init(value, tensor.he_normal(__tensor_ref(value).shape(), fan_in))
+
+fn __assign_init(value, src):
+    let target = __tensor_ref(value)
+    target.mul_(0.0)
+    target.add_(src)
+    __clear_grad(value)
+    return value
+
+fn __clear_grad(value):
+    if __type_of(value) == "instance" and value.kind == "parameter":
+        value.grad = nil
+
+fn __tensor_ref(value):
+    let tag = __type_of(value)
+    if tag == "native:tensor":
+        return value
+    if tag == "instance" and value.kind == "parameter":
+        return value.data
+    panic("nn.init expects tensor or nn.Parameter")

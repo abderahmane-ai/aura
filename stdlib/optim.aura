@@ -87,11 +87,29 @@ fn step(opt, params, grads, clip_norm = nil, clip_value = nil, grad_scale: Float
 
     panic("optim.step unknown optimizer '{name}'")
 
+fn step_params(opt, params, clip_norm = nil, clip_value = nil, grad_scale: Float64 = 1.0):
+    let ps = []
+    let gs = []
+    for param in to_list(params):
+        if __type_of(param) != "instance" or param.kind != "parameter":
+            panic("optim.step_params expects nn.Parameter objects")
+        ps.push(param.data)
+        gs.push(param.grad)
+    return step(opt, ps, gs, clip_norm, clip_value, grad_scale)
+
 fn zero_grad(grads):
     for g in to_list(grads):
         if g != nil:
             g.fill_(0.0)
     return grads
+
+fn zero_grad_params(params):
+    for param in to_list(params):
+        if __type_of(param) != "instance" or param.kind != "parameter":
+            panic("optim.zero_grad_params expects nn.Parameter objects")
+        if param.grad != nil:
+            param.grad.fill_(0.0)
+    return params
 
 fn clip_grad_value_(grads, clip_value: Float64):
     let v = abs(float(clip_value))

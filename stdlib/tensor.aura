@@ -110,11 +110,32 @@ fn variance(t, sample: Bool = false):
 fn std(t, sample: Bool = false):
     return t.std(sample)
 
-fn sum_axis(t, axis: Int = -1):
-    return t.sum_axis(axis)
+fn sum_axis(t, axis: Int = -1, keepdim: Bool = false):
+    return t.sum_axis(axis, keepdim)
 
-fn mean_axis(t, axis: Int = -1):
-    return t.mean_axis(axis)
+fn mean_axis(t, axis: Int = -1, keepdim: Bool = false):
+    return t.mean_axis(axis, keepdim)
+
+fn var_axis(t, axis: Int = -1, keepdim: Bool = false, unbiased: Bool = false):
+    return t.var_axis(axis, keepdim, unbiased)
+
+fn max_axis(t, axis: Int = -1, keepdim: Bool = false):
+    return t.max_axis(axis, keepdim)
+
+fn argmax_axis(t, axis: Int = -1):
+    return t.argmax_axis(axis)
+
+fn unsqueeze(t, axis: Int):
+    return t.unsqueeze(axis)
+
+fn squeeze(t, axis = nil):
+    return t.squeeze(axis)
+
+fn slice_rows(t, start: Int = 0, stop = nil):
+    return t.slice_rows(start, stop)
+
+fn take_rows(t, indices):
+    return t.take_rows(indices)
 
 fn map(t, fn_ref):
     return t.map(fn_ref)

@@ -1,0 +1,97 @@
+module std.data.loader
+
+import std.tensor as tensor
+import std.math as math
+
+class TensorDataset:
+    let kind: String
+    var X
+    var y
+    let size: Int
+
+    fn init(X, y = nil):
+        self.kind = "tensor_dataset"
+        self.X = tensor.tensor(X)
+        if self.X.rank() != 1 and self.X.rank() != 2:
+            panic("data.loader.TensorDataset expects X rank 1 or 2")
+        self.size = self.X.shape()[0]
+        if y == nil:
+            self.y = nil
+        else:
+            self.y = tensor.tensor(y)
+            if self.y.rank() != 1 and self.y.rank() != 2:
+                panic("data.loader.TensorDataset expects y rank 1 or 2")
+            if self.y.shape()[0] != self.size:
+                panic("data.loader.TensorDataset expects X and y with same sample count")
+
+    fn len() -> Int:
+        return self.size
+
+    fn get(index: Int):
+        let idx = [index]
+        let sample_x = self.X.take_rows(idx)
+        if self.X.rank() == 1:
+            sample_x = sample_x.squeeze(0)
+        if self.y == nil:
+            return {"X": sample_x}
+        let sample_y = self.y.take_rows(idx)
+        if self.y.rank() == 1:
+            sample_y = sample_y.squeeze(0)
+        return {"X": sample_x, "y": sample_y}
+
+fn tensor_dataset(X, y = nil):
+    return TensorDataset(X, y)
+
+class DataLoader:
+    let kind: String
+    let dataset
+    let batch_size: Int
+    let shuffle: Bool
+    let drop_last: Bool
+    let seed: Int
+
+    fn init(dataset, batch_size: Int = 32, shuffle: Bool = true, drop_last: Bool = false, seed: Int = 42):
+        if __type_of(dataset) != "instance" or dataset.kind != "tensor_dataset":
+            panic("data.loader.DataLoader expects TensorDataset")
+        if batch_size <= 0:
+            panic("data.loader.DataLoader expects batch_size > 0")
+        self.kind = "data_loader"
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self.seed = seed
+
+    fn batches(epoch: Int = 0):
+        let n = self.dataset.len()
+        let idx = []
+        var i = 0
+        while i < n:
+            idx.push(i)
+            i += 1
+        if self.shuffle:
+            let rng = math.rng(self.seed + epoch)
+            idx = math.shuffle(rng, idx)
+
+        let out = []
+        i = 0
+        while i < n:
+            let stop = min(n, i + self.batch_size)
+            if self.drop_last and stop - i < self.batch_size:
+                break
+            let batch_idx = []
+            var j = i
+            while j < stop:
+                batch_idx.push(idx[j])
+                j += 1
+            let batch_x = self.dataset.X.take_rows(batch_idx)
+            if self.dataset.y == nil:
+                out.push({"X": batch_x})
+            else:
+                let batch_y = self.dataset.y.take_rows(batch_idx)
+                out.push({"X": batch_x, "y": batch_y})
+            i = stop
+        return out
+
+fn data_loader(dataset, batch_size: Int = 32, shuffle: Bool = true, drop_last: Bool = false, seed: Int = 42):
+    return DataLoader(dataset, batch_size, shuffle, drop_last, seed)

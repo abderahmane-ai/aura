@@ -1,0 +1,101 @@
+module std.nn.losses
+
+import std.autograd as autograd
+import std.tensor as tensor
+
+class MSELoss:
+    let kind: String
+    let reduction: String
+
+    fn init(reduction: String = "mean"):
+        if reduction != "mean" and reduction != "sum":
+            panic("nn.losses.MSELoss supports reduction 'mean' or 'sum'")
+        self.kind = "mse_loss"
+        self.reduction = reduction
+
+    fn forward(pred, target):
+        let p = __as_variable(pred)
+        let t = __regression_target(p.data, target)
+        let diff = p.sub(t)
+        let sq = diff.mul(diff)
+        if self.reduction == "sum":
+            return sq.sum()
+        return sq.mean()
+
+fn mse_loss(reduction: String = "mean"):
+    return MSELoss(reduction)
+
+class BCEWithLogitsLoss:
+    let kind: String
+    let reduction: String
+
+    fn init(reduction: String = "mean"):
+        if reduction != "mean" and reduction != "sum":
+            panic("nn.losses.BCEWithLogitsLoss supports reduction 'mean' or 'sum'")
+        self.kind = "bce_with_logits_loss"
+        self.reduction = reduction
+
+    fn forward(logits, target):
+        let out = autograd.bce_with_logits(logits, target)
+        if self.reduction == "sum":
+            let count = __binary_count(target)
+            return out.mul(count)
+        return out
+
+fn bce_with_logits_loss(reduction: String = "mean"):
+    return BCEWithLogitsLoss(reduction)
+
+class CrossEntropyLoss:
+    let kind: String
+    let reduction: String
+
+    fn init(reduction: String = "mean"):
+        if reduction != "mean" and reduction != "sum":
+            panic("nn.losses.CrossEntropyLoss supports reduction 'mean' or 'sum'")
+        self.kind = "cross_entropy_loss"
+        self.reduction = reduction
+
+    fn forward(logits, target):
+        let out = autograd.cross_entropy_with_logits(logits, target)
+        if self.reduction == "sum":
+            let count = __class_count(logits)
+            return out.mul(count)
+        return out
+
+fn cross_entropy_loss(reduction: String = "mean"):
+    return CrossEntropyLoss(reduction)
+
+fn __binary_count(target):
+    let t = tensor.tensor(target)
+    return max(1, t.len())
+
+fn __regression_target(pred_tensor, target):
+    let t = tensor.tensor(target)
+    if __same_shape(t.shape(), pred_tensor.shape()):
+        return t
+    if pred_tensor.rank() == 2 and pred_tensor.shape()[1] == 1 and t.rank() == 1 and t.shape()[0] == pred_tensor.shape()[0]:
+        return t.reshape(pred_tensor.shape())
+    if pred_tensor.rank() == 1 and t.rank() == 2 and t.shape()[1] == 1 and t.shape()[0] == pred_tensor.shape()[0]:
+        return t.flatten()
+    panic("nn.losses.MSELoss target shape mismatch")
+
+fn __same_shape(a, b):
+    if len(a) != len(b):
+        return false
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            return false
+        i += 1
+    return true
+
+fn __class_count(logits):
+    let x = __as_variable(logits)
+    if x.data.rank() == 1:
+        return 1
+    return max(1, x.data.shape()[0])
+
+fn __as_variable(value):
+    if __type_of(value) == "instance" and value.kind == "variable":
+        return value
+    return autograd.variable(value, false)

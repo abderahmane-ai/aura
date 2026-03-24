@@ -1,0 +1,292 @@
+module std.nn.trainer
+
+import std.nn as nn
+import std.nn.losses as losses
+import std.autograd as autograd
+import std.optim as optim
+import std.ml.metrics as metrics
+import std.tensor as tensor
+import std.fs as fs
+
+let CHECKPOINT_VERSION = 1
+
+class Trainer:
+    let kind: String
+    let task: String
+    var optimizer
+    var loss
+    var metrics
+    var config
+    var history
+
+    fn init(task: String, optimizer, loss = nil, metrics = nil, config = {}):
+        if task != "classification" and task != "regression":
+            panic("nn.trainer.Trainer task must be 'classification' or 'regression'")
+        self.kind = "nn_trainer"
+        self.task = task
+        self.optimizer = optimizer
+        self.loss = loss
+        self.metrics = metrics
+        self.config = config
+        self.history = {"train_loss": [], "valid_loss": []}
+
+    fn fit(model, train_loader, valid_loader = nil):
+        __ensure_loader(train_loader)
+        let epochs = max(1, int(__opt(self.config, "epochs", 100)))
+        let log_every = max(1, int(__opt(self.config, "log_every", 10)))
+        let verbose = __opt(self.config, "verbose", false) == true
+        let clip_norm = __opt(self.config, "grad_clip_norm", nil)
+        let clip_value = __opt(self.config, "grad_clip_value", nil)
+        let grad_scale = float(__opt(self.config, "grad_scale", 1.0))
+        let patience = __opt(self.config, "early_stopping_patience", nil)
+        let seed = int(__opt(self.config, "seed", 42))
+        let has_valid = valid_loader != nil
+
+        if self.loss == nil:
+            let probe = train_loader.batches(0)
+            if len(probe) == 0:
+                panic("nn.trainer.fit expects non-empty train loader")
+            let probe_out = model.forward(autograd.variable(probe[0]["X"], false))
+            self.loss = __default_loss(self.task, probe_out)
+
+        let best_valid = nil
+        let stale = 0
+        var epoch = 0
+        while epoch < epochs:
+            nn.train(model)
+            let batches = train_loader.batches(seed + epoch)
+            if len(batches) == 0:
+                panic("nn.trainer.fit train loader produced no batches")
+            for batch in batches:
+                nn.zero_grad(model)
+                let outputs = model.forward(autograd.variable(batch["X"], false))
+                let loss_var = self.loss.forward(outputs, batch["y"])
+                loss_var.backward()
+                optim.step_params(self.optimizer, model.parameters(), clip_norm, clip_value, grad_scale)
+
+            let train_stats = self.evaluate(model, train_loader)
+            self.history["train_loss"].push(train_stats["loss"])
+
+            let valid_stats = nil
+            if has_valid:
+                valid_stats = self.evaluate(model, valid_loader)
+                self.history["valid_loss"].push(valid_stats["loss"])
+
+                if best_valid == nil or valid_stats["loss"] < best_valid:
+                    best_valid = valid_stats["loss"]
+                    stale = 0
+                else:
+                    stale += 1
+                    if patience != nil and stale >= int(patience):
+                        break
+
+            if verbose and ((epoch + 1) % log_every == 0 or epoch == 0 or epoch + 1 == epochs):
+                let train_loss = train_stats["loss"]
+                if has_valid:
+                    let valid_loss = valid_stats["loss"]
+                    print("epoch {epoch + 1}/{epochs} train_loss={train_loss} valid_loss={valid_loss}")
+                else:
+                    print("epoch {epoch + 1}/{epochs} train_loss={train_loss}")
+
+            epoch += 1
+
+        return {"model": model, "optimizer": self.optimizer, "history": self.history}
+
+    fn evaluate(model, loader):
+        __ensure_loader(loader)
+        nn.eval(model)
+        let total = 0
+        let loss_sum = 0.0
+        let pred_chunks = []
+        let target_chunks = []
+        let output_chunks = []
+        for batch in loader.batches(0):
+            let outputs = model.forward(autograd.variable(batch["X"], false))
+            let loss_var = self.loss.forward(outputs, batch["y"])
+            let batch_target = tensor.tensor(batch["y"])
+            let batch_count = batch_target.shape()[0]
+            total += batch_count
+            loss_sum += loss_var.item() * batch_count
+            output_chunks.push(outputs.data)
+            pred_chunks.push(__predict_outputs(self.task, outputs.data))
+            target_chunks.push(__normalized_targets(self.task, batch["y"]))
+        if total == 0:
+            panic("nn.trainer.evaluate loader produced no batches")
+        let preds = __concat_tensors(pred_chunks)
+        let targets = __concat_tensors(target_chunks)
+        if self.task == "classification":
+            let classes = __infer_num_classes(output_chunks, targets)
+            let stats = metrics.classification_metrics(preds, targets, classes)
+            stats["loss"] = loss_sum / total
+            return stats
+        let stats = metrics.regression_metrics(preds, targets)
+        stats["loss"] = loss_sum / total
+        return stats
+
+    fn predict(model, X_or_loader):
+        nn.eval(model)
+        if __type_of(X_or_loader) == "instance" and X_or_loader.kind == "data_loader":
+            let chunks = []
+            for batch in X_or_loader.batches(0):
+                let outputs = model.forward(autograd.variable(batch["X"], false))
+                chunks.push(__predict_outputs(self.task, outputs.data))
+            return __concat_tensors(chunks)
+        let outputs = model.forward(autograd.variable(X_or_loader, false))
+        return __predict_outputs(self.task, outputs.data)
+
+    fn save_checkpoint(path: String, model, extra = {}):
+        return save_checkpoint(path, model, self.optimizer, {"history": self.history, "task": self.task, "extra": extra})
+
+    fn load_checkpoint(path: String, model, optimizer = nil):
+        let restored = load_checkpoint(path, model, optimizer)
+        if restored["history"] != nil:
+            self.history = restored["history"]
+        return restored
+
+fn trainer(task: String, optimizer, loss = nil, metrics = nil, config = {}):
+    return Trainer(task, optimizer, loss, metrics, config)
+
+fn save_checkpoint(path: String, model, optimizer, extra = {}):
+    let payload = {"version": CHECKPOINT_VERSION, "kind": "nn_checkpoint", "model_state": nn.state_dict(model), "optimizer": __serialize_value(optimizer), "extra": extra}
+    if __is_builtin_model(model):
+        payload["model"] = nn.serialize(model)
+    fs.write_json(path, payload)
+    return path
+
+fn load_checkpoint(path: String, model, optimizer = nil):
+    let data = fs.read_json(path)
+    if data["kind"] != "nn_checkpoint":
+        panic("nn.trainer.load_checkpoint expects checkpoint kind 'nn_checkpoint'")
+    nn.load_state_dict(model, data["model_state"])
+    let restored_opt = nil
+    if optimizer != nil and data["optimizer"] != nil:
+        restored_opt = __deserialize_value(data["optimizer"])
+        __restore_optimizer(optimizer, restored_opt)
+    let out = {"model": model, "optimizer": optimizer, "history": nil}
+    if data["extra"] != nil and data["extra"]["history"] != nil:
+        out["history"] = data["extra"]["history"]
+    return out
+
+fn __ensure_loader(loader):
+    if __type_of(loader) != "instance" or loader.kind != "data_loader":
+        panic("nn.trainer expects std.data.loader.DataLoader")
+
+fn __opt(config, key: String, fallback):
+    if config == nil:
+        return fallback
+    let value = config[key]
+    if value == nil:
+        return fallback
+    return value
+
+fn __default_loss(task: String, output):
+    if task == "regression":
+        return losses.mse_loss("mean")
+    if output.data.rank() == 2 and output.data.shape()[1] > 1:
+        return losses.cross_entropy_loss("mean")
+    return losses.bce_with_logits_loss("mean")
+
+fn __predict_outputs(task: String, output):
+    if task == "regression":
+        return __flatten_target(output)
+    if output.rank() == 2 and output.shape()[1] > 1:
+        return output.argmax_axis(1)
+    let probs = output.sigmoid().to_flat_list()
+    let preds = []
+    for prob in probs:
+        if prob >= 0.5:
+            preds.push(1.0)
+        else:
+            preds.push(0.0)
+    return tensor.tensor(preds)
+
+fn __normalized_targets(task: String, target):
+    if task == "regression":
+        return __flatten_target(target)
+    let t = tensor.tensor(target)
+    if t.rank() == 2:
+        if t.shape()[1] == 1:
+            return t.flatten()
+        return t.argmax_axis(1)
+    return t
+
+fn __flatten_target(value):
+    let t = tensor.tensor(value)
+    if t.rank() == 2 and t.shape()[1] == 1:
+        return t.flatten()
+    return t
+
+fn __concat_tensors(chunks):
+    if len(chunks) == 0:
+        return tensor.tensor([])
+    let first = chunks[0]
+    if first.rank() == 1:
+        let values = []
+        for chunk in chunks:
+            for value in chunk.to_flat_list():
+                values.push(value)
+        return tensor.tensor(values)
+    let rows = []
+    for chunk in chunks:
+        for row in chunk.to_list():
+            rows.push(row)
+    return tensor.tensor(rows)
+
+fn __infer_num_classes(output_chunks, targets) -> Int:
+    if len(output_chunks) > 0:
+        let first = output_chunks[0]
+        if first.rank() == 2 and first.shape()[1] > 1:
+            return first.shape()[1]
+    let values = targets.to_flat_list()
+    var best = 0
+    for value in values:
+        let idx = int(value)
+        if idx > best:
+            best = idx
+    return best + 1
+
+fn __is_builtin_model(model) -> Bool:
+    if __type_of(model) != "instance":
+        return false
+    let kind = model.kind
+    return kind == "linear" or kind == "relu" or kind == "sigmoid" or kind == "tanh" or kind == "identity" or kind == "dropout" or kind == "layer_norm" or kind == "batch_norm1d" or kind == "sequential" or kind == "residual"
+
+fn __serialize_value(value):
+    let tag = __type_of(value)
+    if tag == "nil" or tag == "bool" or tag == "number" or tag == "string":
+        return value
+    if tag == "native:tensor":
+        return {"__kind__": "tensor", "shape": value.shape(), "values": value.to_flat_list()}
+    if tag == "list":
+        let out = []
+        for item in value:
+            out.push(__serialize_value(item))
+        return out
+    if tag == "map":
+        let out = {}
+        for key in value:
+            out[key] = __serialize_value(value[key])
+        return out
+    panic("nn.trainer cannot serialize value of type '{tag}'")
+
+fn __deserialize_value(value):
+    let tag = __type_of(value)
+    if tag == "nil" or tag == "bool" or tag == "number" or tag == "string":
+        return value
+    if tag == "list":
+        let out = []
+        for item in value:
+            out.push(__deserialize_value(item))
+        return out
+    if tag == "map":
+        if value["__kind__"] == "tensor":
+            return tensor.tensor(value["values"]).reshape(value["shape"])
+        let out = {}
+        for key in value:
+            out[key] = __deserialize_value(value[key])
+        return out
+    panic("nn.trainer cannot deserialize value of type '{tag}'")
+
+fn __restore_optimizer(dst, src):
+    for key in src:
+        dst[key] = src[key]

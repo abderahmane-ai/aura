@@ -1,0 +1,30 @@
+import std.io as io
+import std.tensor as tensor
+import std.optim as optim
+import std.nn as nn
+import std.nn.trainer as trainer
+import std.data.loader as loader
+
+fn build_data():
+    let rows = []
+    let targets = []
+    var i = -20
+    while i <= 20:
+        let x1 = i / 10.0
+        let x2 = (20 - i) / 10.0
+        rows.push([x1, x2])
+        targets.push(x1 * x1 + 0.5 * x2)
+        i += 1
+    return {"X": tensor.tensor(rows), "y": tensor.tensor(targets)}
+
+fn main():
+    let data = build_data()
+    let dataset = loader.tensor_dataset(data["X"], data["y"])
+    let train_loader = loader.data_loader(dataset, 16, true, false, 11)
+    let model = nn.sequential([nn.linear(2, 8), nn.tanh(), nn.linear(8, 1)])
+    let fit = trainer.trainer("regression", optim.adam(0.03), nil, nil, {"epochs": 300, "verbose": false, "seed": 11})
+    fit.fit(model, train_loader)
+    let stats = fit.evaluate(model, train_loader)
+    let mse = stats["mse"]
+    let loss = stats["loss"]
+    io.println("regression dnn mse={mse} loss={loss}")

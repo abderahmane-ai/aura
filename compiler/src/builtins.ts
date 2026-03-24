@@ -529,6 +529,28 @@ export function isTruthy(v: Value): boolean {
     return true;
 }
 
+function valueTypeName(v: Value): string {
+    if (v === null) return 'nil';
+    if (typeof v === 'boolean') return 'bool';
+    if (typeof v === 'number') return 'number';
+    if (typeof v === 'string') return 'string';
+    const tag = (v as any)?.type;
+    if (!tag) return typeof v;
+    if (tag === 'list') return 'list';
+    if (tag === 'map') return 'map';
+    if (tag === 'range') return 'range';
+    if (tag === 'iter') return 'iter';
+    if (tag === 'function') return 'function';
+    if (tag === 'class') return 'class';
+    if (tag === 'instance') return 'instance';
+    if (tag === 'enum') return 'enum';
+    if (tag === 'module') return 'module';
+    if (tag === 'builtin') return 'builtin';
+    if (tag === 'measure') return 'measure';
+    if (tag === 'native') return 'native:' + (v as AuraNative).kind;
+    return tag;
+}
+
 function builtin(name: string, fn: (args: Value[]) => Value): BuiltinFn {
     return { type: 'builtin', name, fn };
 }
@@ -544,6 +566,7 @@ export function makeBuiltins(): Map<string, Value> {
     }));
 
     b.set('panic', builtin('panic', ([msg]) => runtimeError(auraToString(msg ?? null))));
+    b.set('__type_of', builtin('__type_of', ([value]) => valueTypeName(value ?? null)));
 
     b.set('__unit_register', builtin('__unit_register', ([dimension, base, symbol, factor]) => {
         if (typeof dimension !== 'string' || typeof base !== 'string' || typeof symbol !== 'string' || typeof factor !== 'number') {

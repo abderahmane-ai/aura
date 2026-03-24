@@ -12,6 +12,7 @@ const BUILTINS = new Set<string>([
     '__fs_copy', '__fs_move', '__fs_cwd', '__fs_abs', '__fs_join', '__fs_basename', '__fs_dirname', '__fs_extname', '__fs_normalize', '__fs_walk', '__fs_temp_dir',
     '__io_write', '__io_writeln', '__io_write_err', '__io_writeln_err', '__io_read_line', '__io_read_all_stdin',
     '__time_now_ms', '__time_now_unix_s', '__time_iso_now', '__time_monotonic_ms', '__time_sleep_ms', '__time_parse_iso', '__time_from_unix_ms', '__time_from_unix_s', '__time_to_unix_s', '__time_parts', '__time_add_ms', '__time_diff_ms',
+    '__type_of',
     'panic', '__unit_register', '__measure', '__measure_expect',
 ]);
 

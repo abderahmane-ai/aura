@@ -1,0 +1,114 @@
+module std.nn.functional
+
+import std.tensor as tensor
+import std.autograd as autograd
+import std.math as math
+
+let EPS = 0.000000000001
+
+fn linear(x, weight, bias = nil):
+    let input = __as_variable(x)
+    let w = __as_variable(weight)
+    let out = input.matmul(w)
+    if bias == nil:
+        return out
+    return out.add(__as_variable(bias))
+
+fn relu(x):
+    return __as_variable(x).relu()
+
+fn sigmoid(x):
+    return __as_variable(x).sigmoid()
+
+fn tanh(x):
+    return __as_variable(x).tanh()
+
+fn dropout(x, p: Float64 = 0.5, training: Bool = true, seed = nil):
+    let input = __as_variable(x)
+    if not training or p <= 0:
+        return input
+    if p >= 1:
+        panic("nn.functional.dropout expects p < 1")
+    let keep = 1.0 - p
+    let mask = __dropout_mask(input.data.shape(), keep, seed)
+    return input.mul(mask)
+
+fn layer_norm(x, gamma = nil, beta = nil, eps: Float64 = 0.00001):
+    let input = __as_variable(x)
+    if input.data.rank() != 2:
+        panic("nn.functional.layer_norm expects rank-2 input [batch, features]")
+    let mu = input.mean_axis(1, true)
+    let centered = input.sub(mu)
+    let spread = centered.mul(centered).mean_axis(1, true)
+    let denom = spread.add(eps).pow(0.5)
+    let out = centered.div(denom)
+    if gamma != nil:
+        out = out.mul(__as_variable(gamma))
+    if beta != nil:
+        out = out.add(__as_variable(beta))
+    return out
+
+fn batch_norm1d(x, running_mean, running_var, gamma = nil, beta = nil, training: Bool = true, momentum: Float64 = 0.1, eps: Float64 = 0.00001):
+    let input = __as_variable(x)
+    if input.data.rank() != 2:
+        panic("nn.functional.batch_norm1d expects rank-2 input [batch, features]")
+    let features = input.data.shape()[1]
+    if running_mean.shape()[0] != features or running_var.shape()[0] != features:
+        panic("nn.functional.batch_norm1d running stats shape mismatch")
+
+    let mean_value = nil
+    let variance_value = nil
+    if training:
+        mean_value = input.mean_axis(0, true)
+        let centered = input.sub(mean_value)
+        variance_value = centered.mul(centered).mean_axis(0, true)
+        if running_mean != nil:
+            running_mean.mul_(1.0 - momentum)
+            running_mean.add_(mean_value.data.squeeze(0).mul(momentum))
+        if running_var != nil:
+            running_var.mul_(1.0 - momentum)
+            running_var.add_(variance_value.data.squeeze(0).mul(momentum))
+    else:
+        mean_value = autograd.variable(running_mean.unsqueeze(0), false)
+        variance_value = autograd.variable(running_var.unsqueeze(0), false)
+
+    let out = input.sub(mean_value).div(variance_value.add(eps).pow(0.5))
+    if gamma != nil:
+        out = out.mul(__as_variable(gamma))
+    if beta != nil:
+        out = out.add(__as_variable(beta))
+    return out
+
+fn __dropout_mask(shape, keep: Float64, seed = nil):
+    if seed == nil:
+        return tensor.rand(shape, 0.0, 1.0).map(fn(v, idx):
+            if v < keep:
+                return 1.0 / keep
+            return 0.0
+        )
+    let rng = math.rng(int(seed))
+    let total = __shape_size(shape)
+    let values = []
+    var i = 0
+    while i < total:
+        let draw = math.rand(rng, 0.0, 1.0)
+        if draw < keep:
+            values.push(1.0 / keep)
+        else:
+            values.push(0.0)
+        i += 1
+    return tensor.tensor(values).reshape(shape)
+
+fn __shape_size(shape) -> Int:
+    var out = 1
+    for dim in shape:
+        out *= dim
+    return out
+
+fn __as_variable(value):
+    let tag = __type_of(value)
+    if tag == "instance" and value.kind == "variable":
+        return value
+    if tag == "instance" and value.kind == "parameter":
+        return value.variable()
+    return autograd.variable(value, false)

@@ -1,59 +1,10 @@
 import std.io as io
 import std.fs as fs
-import std.data.csv as csv
 import std.data.table as table
-import std.math as math
 import std.ml.preprocess as prep
 import std.ml.pipeline as pipeline
 import std.ml.logistic as logistic
-
-# ─── Helper: stratified train/test split ─────────────────────────────────────
-
-fn split_table(tbl, test_ratio: Float64 = 0.2, seed: Int = 42):
-    if test_ratio <= 0 or test_ratio >= 1:
-        panic("split_table: test_ratio must be between 0 and 1")
-    let rows = tbl.rows
-    let n = len(rows)
-    if n < 4:
-        panic("split_table: need at least 4 rows")
-
-    let rng = math.rng(seed)
-    let idx = []
-    var i = 0
-    while i < n:
-        idx.push(i)
-        i += 1
-    let shuffled = math.shuffle(rng, idx)
-
-    var test_n = int(float(n) * test_ratio)
-    if test_n < 1:
-        test_n = 1
-    if test_n >= n:
-        test_n = n - 1
-
-    let train_rows = []
-    let test_rows = []
-    var j = 0
-    while j < len(shuffled):
-        let k = shuffled[j]
-        if j < test_n:
-            test_rows.push(to_list(rows[k]))
-        else:
-            train_rows.push(to_list(rows[k]))
-        j += 1
-
-    let train_tbl = table.table(tbl.columns, train_rows, tbl.types, tbl.meta)
-    let test_tbl  = table.table(tbl.columns, test_rows,  tbl.types, tbl.meta)
-    return {"train": train_tbl, "test": test_tbl}
-
-# ─── Helper: derive feature list (all columns except target) ──────────────────
-
-fn feature_cols(tbl, target: String):
-    let out = []
-    for col in tbl.columns:
-        if col != target:
-            out.push(col)
-    return out
+import support.datasets as datasets
 
 # ─── Helper: pretty-print confusion matrix ────────────────────────────────────
 
@@ -77,8 +28,7 @@ fn main():
     io.println("")
 
     # ── 1. Load CSV ──────────────────────────────────────────────────────────
-    let csv_text = fs.read_text("../data/heart.csv").trim()
-    let raw_tbl  = csv.parse(csv_text, {"header": true, "trim": true, "skip_empty": true})
+    let raw_tbl = datasets.heart_table()
     let n_total  = len(raw_tbl.rows)
     let n_cols   = len(raw_tbl.columns)
     io.println("Loaded: {n_total} rows × {n_cols} columns")
@@ -88,11 +38,11 @@ fn main():
     # ── 2. Impute missing values with column mean (ca, thal can have '?') ───
     #   Restrict to feature columns — must NOT impute the target column or its
     #   0/1 labels get replaced with a fractional mean, flipping class encoding.
-    let features_early = feature_cols(raw_tbl, "target")
+    let features_early = raw_tbl.feature_cols("target")
     let imputer = prep.imputer(features_early, "mean")
 
     # ── 3. Train/test split (80/20) ──────────────────────────────────────────
-    let split   = split_table(raw_tbl, 0.2, 777)
+    let split   = raw_tbl.train_test_split(0.2, true, 777)
     let n_train = len(split["train"].rows)
     let n_test  = len(split["test"].rows)
     io.println("Split: {n_train} train / {n_test} test")
@@ -100,7 +50,7 @@ fn main():
 
     # ── 4. Build pipeline:  imputer → standard_scaler → logistic model ─────
     let target  = "target"
-    let features = feature_cols(raw_tbl, target)
+    let features = raw_tbl.feature_cols(target)
     let n_feat   = len(features)
     io.println("Features ({n_feat}): " + ",".join(features))
     io.println("")
@@ -152,9 +102,15 @@ fn main():
     io.println("")
 
     # ── 7. Save model ────────────────────────────────────────────────────────
-    let save_path = "../data/heart_logistic.json"
+    let save_dir = fs.temp_dir("aura-heart-logistic-")
+    let save_path = fs.join([save_dir, "heart_logistic.json"])
     pipe.save(save_path)
     io.println("Model saved to {save_path}")
+    io.println("")
+    let restored = pipeline.load(save_path)
+    let restored_metrics = restored.evaluate(split["test"])
+    let restored_acc = restored_metrics["accuracy"]
+    io.println("Reloaded pipeline test accuracy={restored_acc}")
     io.println("")
 
     # ── 8. Predict on a few hand-crafted examples ────────────────────────────

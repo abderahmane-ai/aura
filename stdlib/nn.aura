@@ -1,0 +1,831 @@
+module std.nn
+
+import std.autograd as autograd
+import std.tensor as tensor
+import std.fs as fs
+import std.nn.functional as functional
+import std.nn.init as init
+
+let SERIAL_VERSION = 1
+
+class Module:
+    let kind: String
+    var training: Bool
+
+    fn init(kind: String = "module"):
+        self.kind = kind
+        self.training = true
+
+    fn forward(x):
+        panic("nn.Module.forward not implemented")
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+class Parameter:
+    let kind: String
+    let requires_grad: Bool
+    var data
+    var grad
+    var name: String
+
+    fn init(data, name: String = ""):
+        self.kind = "parameter"
+        self.requires_grad = true
+        self.data = tensor.tensor(data)
+        self.grad = nil
+        self.name = name
+
+    fn variable():
+        return autograd.leaf(self.data, true, self)
+
+    fn zero_grad():
+        if self.grad != nil:
+            self.grad.fill_(0.0)
+        return self
+
+fn parameter(data, name: String = ""):
+    return Parameter(data, name)
+
+class Linear:
+    let kind: String
+    var training: Bool
+    let in_features: Int
+    let out_features: Int
+    let bias_enabled: Bool
+    let init_name: String
+    var weight
+    var bias
+
+    fn init(in_features: Int, out_features: Int, bias: Bool = true, init_name: String = "xavier_uniform"):
+        if in_features <= 0 or out_features <= 0:
+            panic("nn.Linear expects in_features > 0 and out_features > 0")
+        self.kind = "linear"
+        self.training = true
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bias_enabled = bias
+        self.init_name = init_name
+        self.weight = Parameter(tensor.zeros([in_features, out_features]), "weight")
+        if bias:
+            self.bias = Parameter(tensor.zeros([out_features]), "bias")
+        else:
+            self.bias = nil
+        __apply_linear_init(self)
+
+    fn forward(x):
+        return functional.linear(__as_variable(x), self.weight, self.bias)
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn linear(in_features: Int, out_features: Int, bias: Bool = true, init_name: String = "xavier_uniform"):
+    return Linear(in_features, out_features, bias, init_name)
+
+class ReLU:
+    let kind: String
+    var training: Bool
+
+    fn init():
+        self.kind = "relu"
+        self.training = true
+
+    fn forward(x):
+        return functional.relu(__as_variable(x))
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn relu():
+    return ReLU()
+
+class Sigmoid:
+    let kind: String
+    var training: Bool
+
+    fn init():
+        self.kind = "sigmoid"
+        self.training = true
+
+    fn forward(x):
+        return functional.sigmoid(__as_variable(x))
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn sigmoid():
+    return Sigmoid()
+
+class Tanh:
+    let kind: String
+    var training: Bool
+
+    fn init():
+        self.kind = "tanh"
+        self.training = true
+
+    fn forward(x):
+        return functional.tanh(__as_variable(x))
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn tanh():
+    return Tanh()
+
+class Identity:
+    let kind: String
+    var training: Bool
+
+    fn init():
+        self.kind = "identity"
+        self.training = true
+
+    fn forward(x):
+        return __as_variable(x)
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn identity():
+    return Identity()
+
+class Dropout:
+    let kind: String
+    var training: Bool
+    let p: Float64
+
+    fn init(p: Float64 = 0.5):
+        if p < 0 or p >= 1:
+            panic("nn.Dropout expects p in [0, 1)")
+        self.kind = "dropout"
+        self.training = true
+        self.p = p
+
+    fn forward(x):
+        return functional.dropout(__as_variable(x), self.p, self.training)
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn dropout(p: Float64 = 0.5):
+    return Dropout(p)
+
+class LayerNorm:
+    let kind: String
+    var training: Bool
+    let features: Int
+    let eps: Float64
+    let affine: Bool
+    var gamma
+    var beta
+
+    fn init(features: Int, eps: Float64 = 0.00001, affine: Bool = true):
+        if features <= 0:
+            panic("nn.LayerNorm expects features > 0")
+        self.kind = "layer_norm"
+        self.training = true
+        self.features = features
+        self.eps = eps
+        self.affine = affine
+        if affine:
+            self.gamma = Parameter(tensor.ones([features]), "gamma")
+            self.beta = Parameter(tensor.zeros([features]), "beta")
+        else:
+            self.gamma = nil
+            self.beta = nil
+
+    fn forward(x):
+        return functional.layer_norm(__as_variable(x), self.gamma, self.beta, self.eps)
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn layer_norm(features: Int, eps: Float64 = 0.00001, affine: Bool = true):
+    return LayerNorm(features, eps, affine)
+
+class BatchNorm1d:
+    let kind: String
+    var training: Bool
+    let features: Int
+    let eps: Float64
+    let momentum: Float64
+    let affine: Bool
+    let track_running_stats: Bool
+    var gamma
+    var beta
+    var running_mean
+    var running_var
+
+    fn init(features: Int, eps: Float64 = 0.00001, momentum: Float64 = 0.1, affine: Bool = true, track_running_stats: Bool = true):
+        if features <= 0:
+            panic("nn.BatchNorm1d expects features > 0")
+        self.kind = "batch_norm1d"
+        self.training = true
+        self.features = features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+        if affine:
+            self.gamma = Parameter(tensor.ones([features]), "gamma")
+            self.beta = Parameter(tensor.zeros([features]), "beta")
+        else:
+            self.gamma = nil
+            self.beta = nil
+        self.running_mean = tensor.zeros([features])
+        self.running_var = tensor.ones([features])
+
+    fn forward(x):
+        return functional.batch_norm1d(__as_variable(x), self.running_mean, self.running_var, self.gamma, self.beta, self.training, self.momentum, self.eps)
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn batch_norm1d(features: Int, eps: Float64 = 0.00001, momentum: Float64 = 0.1, affine: Bool = true, track_running_stats: Bool = true):
+    return BatchNorm1d(features, eps, momentum, affine, track_running_stats)
+
+class Sequential:
+    let kind: String
+    var training: Bool
+    let modules
+
+    fn init(modules):
+        self.kind = "sequential"
+        self.training = true
+        self.modules = to_list(modules)
+
+    fn forward(x):
+        var out = __as_variable(x)
+        for layer in self.modules:
+            out = layer.forward(out)
+        return out
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn sequential(modules):
+    return Sequential(modules)
+
+class Residual:
+    let kind: String
+    var training: Bool
+    let block
+
+    fn init(block):
+        self.kind = "residual"
+        self.training = true
+        self.block = block
+
+    fn forward(x):
+        let input = __as_variable(x)
+        let out = self.block.forward(input)
+        if not __same_shape(out.data.shape(), input.data.shape()):
+            panic("nn.Residual expects block output shape to match input shape")
+        return out.add(input)
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn residual(block):
+    return Residual(block)
+
+fn parameters(mod):
+    let out = []
+    __collect_named_parameters("", mod, out)
+    let params = []
+    for pair in out:
+        params.push(pair[1])
+    return params
+
+fn named_parameters(mod):
+    let out = []
+    __collect_named_parameters("", mod, out)
+    return out
+
+fn buffers(mod):
+    let out = []
+    __collect_named_buffers("", mod, out)
+    return out
+
+fn train(mod):
+    __set_training(mod, true)
+    return mod
+
+fn eval(mod):
+    __set_training(mod, false)
+    return mod
+
+fn zero_grad(mod):
+    for param in parameters(mod):
+        param.zero_grad()
+    return mod
+
+fn state_dict(mod):
+    let out = {}
+    __collect_state("", mod, out)
+    return out
+
+fn load_state_dict(mod, state):
+    __load_state("", mod, state)
+    return mod
+
+fn serialize(mod):
+    return __serialize_module(mod)
+
+fn save(mod, path: String):
+    fs.write_json(path, serialize(mod))
+    return path
+
+fn load(path: String):
+    let data = fs.read_json(path)
+    return deserialize(data)
+
+fn deserialize(data):
+    return __deserialize_module(data)
+
+fn __collect_named_parameters(prefix: String, mod, out):
+    let kind = mod.kind
+    if kind == "linear":
+        out.push([prefix + "weight", mod.weight])
+        if mod.bias != nil:
+            out.push([prefix + "bias", mod.bias])
+        return
+    if kind == "layer_norm":
+        if mod.gamma != nil:
+            out.push([prefix + "gamma", mod.gamma])
+            out.push([prefix + "beta", mod.beta])
+        return
+    if kind == "batch_norm1d":
+        if mod.gamma != nil:
+            out.push([prefix + "gamma", mod.gamma])
+            out.push([prefix + "beta", mod.beta])
+        return
+    if kind == "sequential":
+        var i = 0
+        while i < len(mod.modules):
+            __collect_named_parameters(prefix + str(i) + ".", mod.modules[i], out)
+            i += 1
+        return
+    if kind == "residual":
+        __collect_named_parameters(prefix + "block.", mod.block, out)
+        return
+
+fn __collect_named_buffers(prefix: String, mod, out):
+    let kind = mod.kind
+    if kind == "batch_norm1d":
+        out.push([prefix + "running_mean", mod.running_mean])
+        out.push([prefix + "running_var", mod.running_var])
+        return
+    if kind == "sequential":
+        var i = 0
+        while i < len(mod.modules):
+            __collect_named_buffers(prefix + str(i) + ".", mod.modules[i], out)
+            i += 1
+        return
+    if kind == "residual":
+        __collect_named_buffers(prefix + "block.", mod.block, out)
+        return
+
+fn __set_training(mod, flag: Bool):
+    mod.training = flag
+    let kind = mod.kind
+    if kind == "sequential":
+        for child in mod.modules:
+            __set_training(child, flag)
+        return
+    if kind == "residual":
+        __set_training(mod.block, flag)
+
+fn __collect_state(prefix: String, mod, out):
+    for pair in named_parameters(mod):
+        let name = pair[0]
+        let param = pair[1]
+        out[prefix + name] = __tensor_state(param.data)
+    for pair in buffers(mod):
+        let name = pair[0]
+        let value = pair[1]
+        out[prefix + name] = __tensor_state(value)
+
+fn __load_state(prefix: String, mod, state):
+    let kind = mod.kind
+    if kind == "linear":
+        __load_param(state, prefix + "weight", mod.weight)
+        if mod.bias != nil:
+            __load_param(state, prefix + "bias", mod.bias)
+        return
+    if kind == "layer_norm":
+        if mod.gamma != nil:
+            __load_param(state, prefix + "gamma", mod.gamma)
+            __load_param(state, prefix + "beta", mod.beta)
+        return
+    if kind == "batch_norm1d":
+        if mod.gamma != nil:
+            __load_param(state, prefix + "gamma", mod.gamma)
+            __load_param(state, prefix + "beta", mod.beta)
+        __load_tensor(state, prefix + "running_mean", mod.running_mean)
+        __load_tensor(state, prefix + "running_var", mod.running_var)
+        return
+    if kind == "sequential":
+        var i = 0
+        while i < len(mod.modules):
+            __load_state(prefix + str(i) + ".", mod.modules[i], state)
+            i += 1
+        return
+    if kind == "residual":
+        __load_state(prefix + "block.", mod.block, state)
+
+fn __load_param(state, key: String, param):
+    if state[key] == nil:
+        panic("nn.load_state_dict missing parameter '{key}'")
+    __copy_tensor(param.data, __tensor_from_state(state[key]))
+    param.grad = nil
+
+fn __load_tensor(state, key: String, target):
+    if state[key] == nil:
+        panic("nn.load_state_dict missing buffer '{key}'")
+    __copy_tensor(target, __tensor_from_state(state[key]))
+
+fn __serialize_module(mod):
+    let kind = mod.kind
+    let base = {"version": SERIAL_VERSION, "kind": kind, "training": mod.training, "state_dict": state_dict(mod)}
+    if kind == "linear":
+        base["in_features"] = mod.in_features
+        base["out_features"] = mod.out_features
+        base["bias_enabled"] = mod.bias_enabled
+        base["init_name"] = mod.init_name
+        return base
+    if kind == "dropout":
+        base["p"] = mod.p
+        return base
+    if kind == "layer_norm":
+        base["features"] = mod.features
+        base["eps"] = mod.eps
+        base["affine"] = mod.affine
+        return base
+    if kind == "batch_norm1d":
+        base["features"] = mod.features
+        base["eps"] = mod.eps
+        base["momentum"] = mod.momentum
+        base["affine"] = mod.affine
+        base["track_running_stats"] = mod.track_running_stats
+        return base
+    if kind == "sequential":
+        let children = []
+        for child in mod.modules:
+            children.push(__serialize_module(child))
+        base["modules"] = children
+        return base
+    if kind == "residual":
+        base["block"] = __serialize_module(mod.block)
+        return base
+    return base
+
+fn __deserialize_module(data):
+    let kind = data["kind"]
+    let mod = nil
+    if kind == "linear":
+        mod = Linear(int(data["in_features"]), int(data["out_features"]), data["bias_enabled"] == true, data["init_name"])
+    elif kind == "relu":
+        mod = ReLU()
+    elif kind == "sigmoid":
+        mod = Sigmoid()
+    elif kind == "tanh":
+        mod = Tanh()
+    elif kind == "identity":
+        mod = Identity()
+    elif kind == "dropout":
+        mod = Dropout(float(data["p"]))
+    elif kind == "layer_norm":
+        mod = LayerNorm(int(data["features"]), float(data["eps"]), data["affine"] == true)
+    elif kind == "batch_norm1d":
+        mod = BatchNorm1d(int(data["features"]), float(data["eps"]), float(data["momentum"]), data["affine"] == true, data["track_running_stats"] == true)
+    elif kind == "sequential":
+        let children = []
+        for child in data["modules"]:
+            children.push(__deserialize_module(child))
+        mod = Sequential(children)
+    elif kind == "residual":
+        mod = Residual(__deserialize_module(data["block"]))
+    else:
+        panic("nn.deserialize unknown module kind '{kind}'")
+    mod.training = data["training"] == true
+    load_state_dict(mod, data["state_dict"])
+    return mod
+
+fn __apply_linear_init(mod):
+    if mod.init_name == "xavier_uniform":
+        init.xavier_uniform_(mod.weight, mod.in_features, mod.out_features)
+    elif mod.init_name == "xavier_normal":
+        init.xavier_normal_(mod.weight, mod.in_features, mod.out_features)
+    elif mod.init_name == "he_uniform":
+        init.he_uniform_(mod.weight, mod.in_features)
+    elif mod.init_name == "he_normal":
+        init.he_normal_(mod.weight, mod.in_features)
+    else:
+        panic("nn.Linear unknown init '{mod.init_name}'")
+    if mod.bias != nil:
+        init.zeros_(mod.bias)
+
+fn __tensor_state(t):
+    return {"shape": t.shape(), "values": t.to_flat_list()}
+
+fn __tensor_from_state(state):
+    return tensor.tensor(state["values"]).reshape(state["shape"])
+
+fn __copy_tensor(dst, src):
+    dst.mul_(0.0)
+    dst.add_(src)
+    return dst
+
+fn __same_shape(a, b):
+    if len(a) != len(b):
+        return false
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            return false
+        i += 1
+    return true
+
+fn __as_variable(value):
+    let tag = __type_of(value)
+    if tag == "instance" and value.kind == "variable":
+        return value
+    if tag == "instance" and value.kind == "parameter":
+        return value.variable()
+    return autograd.variable(value, false)

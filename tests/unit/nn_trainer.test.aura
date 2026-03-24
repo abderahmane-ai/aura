@@ -1,0 +1,53 @@
+import std.test as test
+import std.fs as fs
+import std.tensor as tensor
+import std.optim as optim
+import std.nn as nn
+import std.nn.trainer as trainer
+import std.data.loader as loader
+
+fn regression_data():
+    let rows = []
+    let targets = []
+    var i = -10
+    while i <= 10:
+        let x1 = i / 10.0
+        let x2 = (10 - i) / 10.0
+        rows.push([x1, x2])
+        targets.push(x1 * x1 + 0.5 * x2)
+        i += 1
+    return {"X": tensor.tensor(rows), "y": tensor.tensor(targets)}
+
+fn main():
+    let X_xor = tensor.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
+    let y_xor = tensor.tensor([0.0, 1.0, 1.0, 0.0])
+    let xor_ds = loader.tensor_dataset(X_xor, y_xor)
+    let xor_loader = loader.data_loader(xor_ds, 4, true, false, 7)
+    let xor_model = nn.sequential([nn.linear(2, 8, true, "xavier_uniform"), nn.tanh(), nn.linear(8, 1)])
+    let xor_trainer = trainer.trainer("classification", optim.adam(0.05), nil, nil, {"epochs": 500, "verbose": false, "seed": 7})
+    xor_trainer.fit(xor_model, xor_loader)
+    let xor_stats = xor_trainer.evaluate(xor_model, xor_loader)
+    test.assert_true(xor_stats["accuracy"] >= 0.95)
+
+    let reg = regression_data()
+    let reg_ds = loader.tensor_dataset(reg["X"], reg["y"])
+    let reg_loader = loader.data_loader(reg_ds, 8, true, false, 9)
+    let reg_model = nn.sequential([nn.linear(2, 8, true, "xavier_uniform"), nn.tanh(), nn.linear(8, 1)])
+    let reg_trainer = trainer.trainer("regression", optim.adam(0.03), nil, nil, {"epochs": 400, "verbose": false, "seed": 9})
+    reg_trainer.fit(reg_model, reg_loader)
+    let reg_stats = reg_trainer.evaluate(reg_model, reg_loader)
+    test.assert_true(reg_stats["mse"] < 0.05)
+
+    let dir = fs.temp_dir("aura-nn-checkpoint-")
+    let path = fs.join([dir, "xor_checkpoint.json"])
+    xor_trainer.save_checkpoint(path, xor_model, {"tag": "xor"})
+    let restored_model = nn.sequential([nn.linear(2, 8, true, "xavier_uniform"), nn.tanh(), nn.linear(8, 1)])
+    let restored_optimizer = optim.adam(0.05)
+    let restored = xor_trainer.load_checkpoint(path, restored_model, restored_optimizer)
+    let preds_before = xor_trainer.predict(xor_model, X_xor).to_list()
+    let preds_after = xor_trainer.predict(restored_model, X_xor).to_list()
+    test.assert_equal(restored["history"]["train_loss"].len() > 0, true)
+    test.assert_approx(preds_before[0], preds_after[0], 0.000001)
+    test.assert_approx(preds_before[1], preds_after[1], 0.000001)
+    test.assert_approx(preds_before[2], preds_after[2], 0.000001)
+    test.assert_approx(preds_before[3], preds_after[3], 0.000001)

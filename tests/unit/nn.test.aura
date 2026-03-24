@@ -1,0 +1,41 @@
+import std.test as test
+import std.fs as fs
+import std.tensor as tensor
+import std.nn as nn
+
+fn main():
+    let linear = nn.linear(2, 3)
+    let out = linear.forward([[1.0, 2.0], [3.0, 4.0]])
+    test.assert_equal(out.data.shape()[0], 2)
+    test.assert_equal(out.data.shape()[1], 3)
+    test.assert_equal(len(linear.parameters()), 2)
+
+    let norm = nn.layer_norm(3)
+    let norm_out = norm.forward([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    let row_means = norm_out.data.mean_axis(1)
+    test.assert_approx(row_means.to_list()[0], 0.0, 0.000001)
+    test.assert_approx(row_means.to_list()[1], 0.0, 0.000001)
+
+    let bn = nn.batch_norm1d(2)
+    bn.forward([[1.0, 2.0], [3.0, 4.0]])
+    test.assert_true(bn.running_mean.to_flat_list()[0] != 0.0)
+    bn.eval()
+    let bn_eval = bn.forward([[1.0, 2.0], [3.0, 4.0]])
+    test.assert_equal(bn_eval.data.shape()[1], 2)
+
+    let drop = nn.dropout(0.5)
+    drop.eval()
+    let dropped = drop.forward([[1.0, 2.0]])
+    test.assert_equal(dropped.data.to_list()[0][0], 1)
+    test.assert_equal(dropped.data.to_list()[0][1], 2)
+
+    let model = nn.sequential([nn.linear(2, 4), nn.relu(), nn.linear(4, 1)])
+    let sample = tensor.tensor([[0.5, -1.0], [2.0, 3.0]])
+    let before = model.forward(sample).data.to_list()
+    let dir = fs.temp_dir("aura-nn-")
+    let path = fs.join([dir, "model.json"])
+    model.save(path)
+    let restored = nn.load(path)
+    let after = restored.forward(sample).data.to_list()
+    test.assert_approx(before[0][0], after[0][0], 0.000001)
+    test.assert_approx(before[1][0], after[1][0], 0.000001)

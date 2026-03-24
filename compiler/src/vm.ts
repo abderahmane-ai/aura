@@ -1333,8 +1333,15 @@ export class VM {
                 }
                 return { type: 'native', kind: 'tensor', data: { shape: [cols, rows], values: out } as NativeTensorData } as AuraNative;
             },
-            sum_axis: () => this.builtin('tensor.sum_axis', ([axis]: Value[]) => this.tensorReduceAxis(data, axis, 'sum')),
-            mean_axis: () => this.builtin('tensor.mean_axis', ([axis]: Value[]) => this.tensorReduceAxis(data, axis, 'mean')),
+            sum_axis: () => this.builtin('tensor.sum_axis', ([axis, keepdim]: Value[]) => this.tensorReduceAxis(data, axis, 'sum', keepdim === true)),
+            mean_axis: () => this.builtin('tensor.mean_axis', ([axis, keepdim]: Value[]) => this.tensorReduceAxis(data, axis, 'mean', keepdim === true)),
+            var_axis: () => this.builtin('tensor.var_axis', ([axis, keepdim, unbiased]: Value[]) => this.tensorVarianceAxis(data, axis, keepdim === true, unbiased === true)),
+            max_axis: () => this.builtin('tensor.max_axis', ([axis, keepdim]: Value[]) => this.tensorMaxAxis(data, axis, keepdim === true)),
+            argmax_axis: () => this.builtin('tensor.argmax_axis', ([axis]: Value[]) => this.tensorArgmaxAxis(data, axis)),
+            unsqueeze: () => this.builtin('tensor.unsqueeze', ([axis]: Value[]) => this.tensorUnsqueeze(data, axis)),
+            squeeze: () => this.builtin('tensor.squeeze', ([axis]: Value[]) => this.tensorSqueeze(data, axis)),
+            slice_rows: () => this.builtin('tensor.slice_rows', ([start, stop]: Value[]) => this.tensorSliceRows(data, start, stop)),
+            take_rows: () => this.builtin('tensor.take_rows', ([indices]: Value[]) => this.tensorTakeRows(data, indices)),
             get: () => this.builtin('tensor.get', ([idx]: Value[]) => {
                 const at = this.tensorLinearIndex(data.values.length, idx, 'tensor.get');
                 return data.values[at];
@@ -1621,32 +1628,47 @@ export class VM {
         return targetNative;
     }
 
-    private tensorReduceAxis(data: NativeTensorData, axisValue: Value, kind: 'sum' | 'mean'): Value {
+    private tensorNormalizeAxis(axisValue: Value, rank: number, context: string): number {
+        if (rank <= 0) runtimeError(context + ' requires rank >= 1');
+        const raw = axisValue === undefined || axisValue === null
+            ? -1
+            : Math.trunc(this.asNumber(axisValue, context + ' axis'));
+        const axis = raw < 0 ? rank + raw : raw;
+        if (axis < 0 || axis >= rank) runtimeError(context + ' axis out of range');
+        return axis;
+    }
+
+    private tensorScalarData(value: number): AuraNative {
+        return { type: 'native', kind: 'tensor', data: { shape: [1], values: [value] } as NativeTensorData } as AuraNative;
+    }
+
+    private tensorReduceAxis(data: NativeTensorData, axisValue: Value, kind: 'sum' | 'mean', keepdim = false): Value {
         if (data.shape.length === 1) {
-            if (axisValue !== undefined && axisValue !== null) {
-                const axis = Math.trunc(this.asNumber(axisValue, 'tensor.' + kind + '_axis'));
-                if (axis !== 0 && axis !== -1) runtimeError('tensor.' + kind + '_axis axis must be 0 or -1 for rank-1 tensor');
-            }
+            this.tensorNormalizeAxis(axisValue, 1, 'tensor.' + kind + '_axis');
             const total = data.values.reduce((acc, cur) => acc + cur, 0);
-            return kind === 'sum' ? total : (data.values.length === 0 ? 0 : total / data.values.length);
+            const reduced = kind === 'sum' ? total : (data.values.length === 0 ? 0 : total / data.values.length);
+            if (keepdim) return this.tensorScalarData(reduced);
+            return reduced;
         }
 
         if (data.shape.length !== 2) runtimeError('tensor.' + kind + '_axis currently supports rank-1 and rank-2 tensors');
 
         const rows = data.shape[0];
         const cols = data.shape[1];
-        const axis = axisValue === undefined || axisValue === null
-            ? -1
-            : Math.trunc(this.asNumber(axisValue, 'tensor.' + kind + '_axis'));
+        const axis = this.tensorNormalizeAxis(axisValue, 2, 'tensor.' + kind + '_axis');
 
-        if (axis === -1 || axis === 1) {
+        if (axis === 1) {
             const out = new Array<number>(rows).fill(0);
             for (let r = 0; r < rows; r++) {
                 let acc = 0;
                 for (let c = 0; c < cols; c++) acc += data.values[r * cols + c];
                 out[r] = kind === 'mean' ? (cols === 0 ? 0 : acc / cols) : acc;
             }
-            return { type: 'native', kind: 'tensor', data: { shape: [rows], values: out } as NativeTensorData } as AuraNative;
+            return {
+                type: 'native',
+                kind: 'tensor',
+                data: { shape: keepdim ? [rows, 1] : [rows], values: out } as NativeTensorData,
+            } as AuraNative;
         }
 
         if (axis === 0) {
@@ -1656,10 +1678,235 @@ export class VM {
                 for (let r = 0; r < rows; r++) acc += data.values[r * cols + c];
                 out[c] = kind === 'mean' ? (rows === 0 ? 0 : acc / rows) : acc;
             }
-            return { type: 'native', kind: 'tensor', data: { shape: [cols], values: out } as NativeTensorData } as AuraNative;
+            return {
+                type: 'native',
+                kind: 'tensor',
+                data: { shape: keepdim ? [1, cols] : [cols], values: out } as NativeTensorData,
+            } as AuraNative;
         }
 
-        runtimeError('tensor.' + kind + '_axis axis must be 0, 1, or -1');
+        runtimeError('tensor.' + kind + '_axis axis must be 0 or 1');
+    }
+
+    private tensorVarianceAxis(data: NativeTensorData, axisValue: Value, keepdim: boolean, unbiased: boolean): AuraNative {
+        if (data.shape.length === 1) {
+            this.tensorNormalizeAxis(axisValue, 1, 'tensor.var_axis');
+            const count = data.values.length;
+            if (count === 0) return this.tensorScalarData(0);
+            if (unbiased && count < 2) runtimeError('tensor.var_axis(unbiased=true) requires at least 2 values');
+            const mean = data.values.reduce((acc, cur) => acc + cur, 0) / count;
+            let acc = 0;
+            for (const value of data.values) {
+                const delta = value - mean;
+                acc += delta * delta;
+            }
+            const denom = unbiased ? count - 1 : count;
+            const variance = denom === 0 ? 0 : acc / denom;
+            if (keepdim) return this.tensorScalarData(variance);
+            return this.tensorScalarData(variance);
+        }
+
+        if (data.shape.length !== 2) runtimeError('tensor.var_axis currently supports rank-1 and rank-2 tensors');
+        const rows = data.shape[0];
+        const cols = data.shape[1];
+        const axis = this.tensorNormalizeAxis(axisValue, 2, 'tensor.var_axis');
+
+        if (axis === 0) {
+            if (unbiased && rows < 2) runtimeError('tensor.var_axis(unbiased=true) requires at least 2 rows');
+            const out = new Array<number>(cols).fill(0);
+            for (let c = 0; c < cols; c++) {
+                let mean = 0;
+                for (let r = 0; r < rows; r++) mean += data.values[r * cols + c];
+                mean = rows === 0 ? 0 : mean / rows;
+                let acc = 0;
+                for (let r = 0; r < rows; r++) {
+                    const delta = data.values[r * cols + c] - mean;
+                    acc += delta * delta;
+                }
+                const denom = unbiased ? rows - 1 : rows;
+                out[c] = denom <= 0 ? 0 : acc / denom;
+            }
+            return {
+                type: 'native',
+                kind: 'tensor',
+                data: { shape: keepdim ? [1, cols] : [cols], values: out } as NativeTensorData,
+            } as AuraNative;
+        }
+
+        if (unbiased && cols < 2) runtimeError('tensor.var_axis(unbiased=true) requires at least 2 columns');
+        const out = new Array<number>(rows).fill(0);
+        for (let r = 0; r < rows; r++) {
+            let mean = 0;
+            for (let c = 0; c < cols; c++) mean += data.values[r * cols + c];
+            mean = cols === 0 ? 0 : mean / cols;
+            let acc = 0;
+            for (let c = 0; c < cols; c++) {
+                const delta = data.values[r * cols + c] - mean;
+                acc += delta * delta;
+            }
+            const denom = unbiased ? cols - 1 : cols;
+            out[r] = denom <= 0 ? 0 : acc / denom;
+        }
+        return {
+            type: 'native',
+            kind: 'tensor',
+            data: { shape: keepdim ? [rows, 1] : [rows], values: out } as NativeTensorData,
+        } as AuraNative;
+    }
+
+    private tensorMaxAxis(data: NativeTensorData, axisValue: Value, keepdim: boolean): AuraNative {
+        if (data.shape.length === 1) {
+            this.tensorNormalizeAxis(axisValue, 1, 'tensor.max_axis');
+            if (data.values.length === 0) runtimeError('tensor.max_axis requires non-empty tensor');
+            return this.tensorScalarData(Math.max(...data.values));
+        }
+        if (data.shape.length !== 2) runtimeError('tensor.max_axis currently supports rank-1 and rank-2 tensors');
+        const rows = data.shape[0];
+        const cols = data.shape[1];
+        const axis = this.tensorNormalizeAxis(axisValue, 2, 'tensor.max_axis');
+        if (axis === 0) {
+            const out = new Array<number>(cols).fill(-Infinity);
+            for (let c = 0; c < cols; c++) {
+                for (let r = 0; r < rows; r++) {
+                    const value = data.values[r * cols + c];
+                    if (value > out[c]) out[c] = value;
+                }
+            }
+            return {
+                type: 'native',
+                kind: 'tensor',
+                data: { shape: keepdim ? [1, cols] : [cols], values: out } as NativeTensorData,
+            } as AuraNative;
+        }
+        const out = new Array<number>(rows).fill(-Infinity);
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const value = data.values[r * cols + c];
+                if (value > out[r]) out[r] = value;
+            }
+        }
+        return {
+            type: 'native',
+            kind: 'tensor',
+            data: { shape: keepdim ? [rows, 1] : [rows], values: out } as NativeTensorData,
+        } as AuraNative;
+    }
+
+    private tensorArgmaxAxis(data: NativeTensorData, axisValue: Value): AuraNative {
+        if (data.shape.length === 1) {
+            this.tensorNormalizeAxis(axisValue, 1, 'tensor.argmax_axis');
+            if (data.values.length === 0) runtimeError('tensor.argmax_axis requires non-empty tensor');
+            let best = 0;
+            for (let i = 1; i < data.values.length; i++) if (data.values[i] > data.values[best]) best = i;
+            return this.tensorScalarData(best);
+        }
+        if (data.shape.length !== 2) runtimeError('tensor.argmax_axis currently supports rank-1 and rank-2 tensors');
+        const rows = data.shape[0];
+        const cols = data.shape[1];
+        const axis = this.tensorNormalizeAxis(axisValue, 2, 'tensor.argmax_axis');
+        if (axis === 0) {
+            const out = new Array<number>(cols).fill(0);
+            for (let c = 0; c < cols; c++) {
+                let best = 0;
+                let bestValue = data.values[c];
+                for (let r = 1; r < rows; r++) {
+                    const value = data.values[r * cols + c];
+                    if (value > bestValue) {
+                        bestValue = value;
+                        best = r;
+                    }
+                }
+                out[c] = best;
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [cols], values: out } as NativeTensorData } as AuraNative;
+        }
+        const out = new Array<number>(rows).fill(0);
+        for (let r = 0; r < rows; r++) {
+            let best = 0;
+            let bestValue = data.values[r * cols];
+            for (let c = 1; c < cols; c++) {
+                const value = data.values[r * cols + c];
+                if (value > bestValue) {
+                    bestValue = value;
+                    best = c;
+                }
+            }
+            out[r] = best;
+        }
+        return { type: 'native', kind: 'tensor', data: { shape: [rows], values: out } as NativeTensorData } as AuraNative;
+    }
+
+    private tensorUnsqueeze(data: NativeTensorData, axisValue: Value): AuraNative {
+        const rank = data.shape.length;
+        const raw = axisValue === undefined || axisValue === null
+            ? rank
+            : Math.trunc(this.asNumber(axisValue, 'tensor.unsqueeze axis'));
+        const axis = raw < 0 ? rank + raw + 1 : raw;
+        if (axis < 0 || axis > rank) runtimeError('tensor.unsqueeze axis out of range');
+        const shape = [...data.shape];
+        shape.splice(axis, 0, 1);
+        return { type: 'native', kind: 'tensor', data: { shape, values: [...data.values] } as NativeTensorData } as AuraNative;
+    }
+
+    private tensorSqueeze(data: NativeTensorData, axisValue: Value): AuraNative {
+        if (data.shape.length === 0) return { type: 'native', kind: 'tensor', data: { shape: [1], values: [...data.values] } as NativeTensorData } as AuraNative;
+        const shape = [...data.shape];
+        if (axisValue === undefined || axisValue === null) {
+            const out = shape.filter((dim) => dim !== 1);
+            return { type: 'native', kind: 'tensor', data: { shape: out.length === 0 ? [1] : out, values: [...data.values] } as NativeTensorData } as AuraNative;
+        }
+        const axis = this.tensorNormalizeAxis(axisValue, shape.length, 'tensor.squeeze');
+        if (shape[axis] !== 1) runtimeError('tensor.squeeze axis must have size 1');
+        shape.splice(axis, 1);
+        return { type: 'native', kind: 'tensor', data: { shape: shape.length === 0 ? [1] : shape, values: [...data.values] } as NativeTensorData } as AuraNative;
+    }
+
+    private tensorSliceRows(data: NativeTensorData, startValue: Value, stopValue: Value): AuraNative {
+        if (data.shape.length !== 1 && data.shape.length !== 2) runtimeError('tensor.slice_rows currently supports rank-1 and rank-2 tensors');
+        const rows = data.shape[0];
+        let start = startValue === undefined || startValue === null ? 0 : this.expectInteger(startValue, 'tensor.slice_rows start');
+        let stop = stopValue === undefined || stopValue === null ? rows : this.expectInteger(stopValue, 'tensor.slice_rows stop');
+        if (start < 0) start += rows;
+        if (stop < 0) stop += rows;
+        start = Math.max(0, Math.min(rows, start));
+        stop = Math.max(start, Math.min(rows, stop));
+        if (data.shape.length === 1) {
+            return {
+                type: 'native',
+                kind: 'tensor',
+                data: { shape: [stop - start], values: data.values.slice(start, stop) } as NativeTensorData,
+            } as AuraNative;
+        }
+        const cols = data.shape[1];
+        return {
+            type: 'native',
+            kind: 'tensor',
+            data: { shape: [stop - start, cols], values: data.values.slice(start * cols, stop * cols) } as NativeTensorData,
+        } as AuraNative;
+    }
+
+    private tensorTakeRows(data: NativeTensorData, indicesValue: Value): AuraNative {
+        if (data.shape.length !== 1 && data.shape.length !== 2) runtimeError('tensor.take_rows currently supports rank-1 and rank-2 tensors');
+        if ((indicesValue as any)?.type !== 'list') runtimeError('tensor.take_rows expects indices as list');
+        const indices = (indicesValue as AuraList).items;
+        const rows = data.shape[0];
+        if (data.shape.length === 1) {
+            const out = new Array<number>(indices.length);
+            for (let i = 0; i < indices.length; i++) {
+                const idx = this.resolveIndex(indices[i], rows, 'tensor.take_rows');
+                out[i] = data.values[idx];
+            }
+            return { type: 'native', kind: 'tensor', data: { shape: [indices.length], values: out } as NativeTensorData } as AuraNative;
+        }
+        const cols = data.shape[1];
+        const out = new Array<number>(indices.length * cols);
+        for (let i = 0; i < indices.length; i++) {
+            const idx = this.resolveIndex(indices[i], rows, 'tensor.take_rows');
+            for (let c = 0; c < cols; c++) {
+                out[i * cols + c] = data.values[idx * cols + c];
+            }
+        }
+        return { type: 'native', kind: 'tensor', data: { shape: [indices.length, cols], values: out } as NativeTensorData } as AuraNative;
     }
 
     private tensorSoftmax(data: NativeTensorData, axisValue: Value, logOutput: boolean): AuraNative {

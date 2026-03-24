@@ -1,0 +1,608 @@
+module std.autograd
+
+import std.tensor as tensor
+
+let VAR_ID_STATE = {"next": 1}
+let EPS = 0.000000000001
+
+class Variable:
+    let kind: String
+    let id: Int
+    var data
+    var grad
+    var requires_grad: Bool
+    var parents
+    var op: String
+    var ctx
+    var leaf_ref
+
+    fn init(data, requires_grad: Bool = false, parents = nil, op: String = "", ctx = nil, leaf_ref = nil):
+        self.kind = "variable"
+        let next_id = int(VAR_ID_STATE["next"])
+        self.id = next_id
+        VAR_ID_STATE["next"] = next_id + 1
+        self.data = __as_tensor(data)
+        self.grad = nil
+        self.requires_grad = requires_grad
+        if parents == nil:
+            self.parents = []
+        else:
+            self.parents = to_list(parents)
+        self.op = op
+        if ctx == nil:
+            self.ctx = {}
+        else:
+            self.ctx = ctx
+        self.leaf_ref = leaf_ref
+
+    fn clone():
+        return Variable(self.data.clone(), self.requires_grad, [], "", {}, nil)
+
+    fn detach():
+        return Variable(self.data.clone(), false, [], "", {}, nil)
+
+    fn zero_grad():
+        if self.requires_grad:
+            self.grad = tensor.zeros_like(self.data)
+        else:
+            self.grad = nil
+        return self
+
+    fn requires_grad_(flag: Bool):
+        self.requires_grad = flag
+        return self
+
+    fn item() -> Float64:
+        if self.data.len() != 1:
+            panic("autograd.Variable.item expects scalar tensor")
+        return float(self.data.to_flat_list()[0])
+
+    fn backward(gradient = nil):
+        __backward(self, gradient)
+        return self
+
+    fn add(other):
+        return add(self, other)
+
+    fn sub(other):
+        return sub(self, other)
+
+    fn mul(other):
+        return mul(self, other)
+
+    fn div(other):
+        return div(self, other)
+
+    fn pow(other):
+        return pow(self, other)
+
+    fn neg():
+        return neg(self)
+
+    fn exp():
+        return exp(self)
+
+    fn log():
+        return log(self)
+
+    fn relu():
+        return relu(self)
+
+    fn sigmoid():
+        return sigmoid(self)
+
+    fn tanh():
+        return tanh(self)
+
+    fn reshape(shape):
+        return reshape(self, shape)
+
+    fn transpose():
+        return transpose(self)
+
+    fn sum():
+        return sum(self)
+
+    fn mean():
+        return mean(self)
+
+    fn sum_axis(axis: Int = -1, keepdim: Bool = false):
+        return sum_axis(self, axis, keepdim)
+
+    fn mean_axis(axis: Int = -1, keepdim: Bool = false):
+        return mean_axis(self, axis, keepdim)
+
+    fn matmul(other):
+        return matmul(self, other)
+
+fn variable(data, requires_grad: Bool = false):
+    return Variable(data, requires_grad, [], "", {}, nil)
+
+fn leaf(data, requires_grad: Bool = false, leaf_ref = nil):
+    return Variable(data, requires_grad, [], "leaf", {}, leaf_ref)
+
+fn clone(v):
+    return __ensure_variable(v).clone()
+
+fn detach(v):
+    return __ensure_variable(v).detach()
+
+fn zero_grad(v):
+    return __ensure_variable(v).zero_grad()
+
+fn add(a, b):
+    let lhs = __ensure_variable(a)
+    let rhs = __ensure_variable(b)
+    let requires_grad = lhs.requires_grad or rhs.requires_grad
+    let ctx = {"a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
+    return Variable(lhs.data.add(rhs.data), requires_grad, [lhs, rhs], "add", ctx, nil)
+
+fn sub(a, b):
+    let lhs = __ensure_variable(a)
+    let rhs = __ensure_variable(b)
+    let requires_grad = lhs.requires_grad or rhs.requires_grad
+    let ctx = {"a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
+    return Variable(lhs.data.sub(rhs.data), requires_grad, [lhs, rhs], "sub", ctx, nil)
+
+fn mul(a, b):
+    let lhs = __ensure_variable(a)
+    let rhs = __ensure_variable(b)
+    let requires_grad = lhs.requires_grad or rhs.requires_grad
+    let ctx = {"lhs": lhs.data.clone(), "rhs": rhs.data.clone(), "a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
+    return Variable(lhs.data.mul(rhs.data), requires_grad, [lhs, rhs], "mul", ctx, nil)
+
+fn div(a, b):
+    let lhs = __ensure_variable(a)
+    let rhs = __ensure_variable(b)
+    let requires_grad = lhs.requires_grad or rhs.requires_grad
+    let ctx = {"lhs": lhs.data.clone(), "rhs": rhs.data.clone(), "a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
+    return Variable(lhs.data.div(rhs.data), requires_grad, [lhs, rhs], "div", ctx, nil)
+
+fn pow(a, b):
+    let lhs = __ensure_variable(a)
+    let rhs = __ensure_variable(b)
+    let requires_grad = lhs.requires_grad or rhs.requires_grad
+    let out = lhs.data.pow(rhs.data)
+    let ctx = {"lhs": lhs.data.clone(), "rhs": rhs.data.clone(), "out": out.clone(), "a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
+    return Variable(out, requires_grad, [lhs, rhs], "pow", ctx, nil)
+
+fn neg(v):
+    let value = __ensure_variable(v)
+    return Variable(value.data.mul(-1.0), value.requires_grad, [value], "neg", {}, nil)
+
+fn exp(v):
+    let value = __ensure_variable(v)
+    let out = value.data.exp()
+    return Variable(out, value.requires_grad, [value], "exp", {"out": out.clone()}, nil)
+
+fn log(v):
+    let value = __ensure_variable(v)
+    return Variable(value.data.log(), value.requires_grad, [value], "log", {"input": value.data.clone()}, nil)
+
+fn relu(v):
+    let value = __ensure_variable(v)
+    return Variable(value.data.relu(), value.requires_grad, [value], "relu", {"input": value.data.clone()}, nil)
+
+fn sigmoid(v):
+    let value = __ensure_variable(v)
+    let out = value.data.sigmoid()
+    return Variable(out, value.requires_grad, [value], "sigmoid", {"out": out.clone()}, nil)
+
+fn tanh(v):
+    let value = __ensure_variable(v)
+    let out = value.data.tanh()
+    return Variable(out, value.requires_grad, [value], "tanh", {"out": out.clone()}, nil)
+
+fn reshape(v, shape):
+    let value = __ensure_variable(v)
+    return Variable(value.data.reshape(shape), value.requires_grad, [value], "reshape", {"shape": value.data.shape()}, nil)
+
+fn transpose(v):
+    let value = __ensure_variable(v)
+    return Variable(value.data.transpose(), value.requires_grad, [value], "transpose", {}, nil)
+
+fn sum(v):
+    let value = __ensure_variable(v)
+    let scalar = tensor.tensor([value.data.sum()])
+    return Variable(scalar, value.requires_grad, [value], "sum", {"shape": value.data.shape()}, nil)
+
+fn mean(v):
+    let value = __ensure_variable(v)
+    let scalar = tensor.tensor([value.data.mean()])
+    return Variable(scalar, value.requires_grad, [value], "mean", {"shape": value.data.shape(), "count": value.data.len()}, nil)
+
+fn sum_axis(v, axis: Int = -1, keepdim: Bool = false):
+    let value = __ensure_variable(v)
+    let actual_axis = __normalize_axis(axis, value.data.rank())
+    let reduced = value.data.sum_axis(actual_axis, keepdim)
+    return Variable(__as_tensor(reduced), value.requires_grad, [value], "sum_axis", {"shape": value.data.shape(), "axis": actual_axis, "keepdim": keepdim}, nil)
+
+fn mean_axis(v, axis: Int = -1, keepdim: Bool = false):
+    let value = __ensure_variable(v)
+    let actual_axis = __normalize_axis(axis, value.data.rank())
+    let count = value.data.shape()[actual_axis]
+    let reduced = value.data.mean_axis(actual_axis, keepdim)
+    return Variable(__as_tensor(reduced), value.requires_grad, [value], "mean_axis", {"shape": value.data.shape(), "axis": actual_axis, "keepdim": keepdim, "count": count}, nil)
+
+fn matmul(a, b):
+    let lhs = __ensure_variable(a)
+    let rhs = __ensure_variable(b)
+    let out = lhs.data.matmul(rhs.data)
+    let requires_grad = lhs.requires_grad or rhs.requires_grad
+    let ctx = {"lhs": lhs.data.clone(), "rhs": rhs.data.clone()}
+    return Variable(__as_tensor(out), requires_grad, [lhs, rhs], "matmul", ctx, nil)
+
+fn bce_with_logits(logits, target):
+    let value = __ensure_variable(logits)
+    let target_t = __binary_target_tensor(target, value.data.shape())
+    let probs = value.data.sigmoid()
+    let loss = tensor.bce_loss(probs, target_t, EPS)
+    let count = max(1, probs.len())
+    return Variable(tensor.tensor([loss]), value.requires_grad, [value], "bce_with_logits", {"probs": probs, "target": target_t, "count": count}, nil)
+
+fn cross_entropy_with_logits(logits, target):
+    let value = __ensure_variable(logits)
+    let shape = value.data.shape()
+    if value.data.rank() == 1:
+        let reshaped = value.data.reshape([1, shape[0]])
+        let target_oh = __class_target_tensor(target, [1, shape[0]])
+        let probs = reshaped.softmax(1)
+        let loss = tensor.cross_entropy_with_logits(reshaped, target_oh)
+        return Variable(tensor.tensor([loss]), value.requires_grad, [value], "cross_entropy_with_logits", {"probs": probs, "target": target_oh, "shape": shape, "batch": 1}, nil)
+    if value.data.rank() != 2:
+        panic("autograd.cross_entropy_with_logits expects logits rank 1 or 2")
+    let target_oh = __class_target_tensor(target, shape)
+    let probs = value.data.softmax(1)
+    let loss = tensor.cross_entropy_with_logits(value.data, target_oh)
+    return Variable(tensor.tensor([loss]), value.requires_grad, [value], "cross_entropy_with_logits", {"probs": probs, "target": target_oh, "shape": shape, "batch": shape[0]}, nil)
+
+fn __backward(root, gradient = nil):
+    let value = __ensure_variable(root)
+    let order = []
+    let seen = {}
+    let nodes = {}
+    __build_topology(value, seen, order, nodes)
+
+    for node_id in order:
+        let node = nodes[str(node_id)]
+        if len(node.parents) > 0 or node.leaf_ref != nil:
+            node.grad = nil
+
+    let seed = __initial_gradient(value, gradient)
+    __accumulate_grad(value, seed)
+
+    var i = len(order) - 1
+    while i >= 0:
+        let node = nodes[str(order[i])]
+        if node.grad != nil and node.requires_grad:
+            __dispatch_backward(node)
+        i -= 1
+
+fn __dispatch_backward(node):
+    if node.op == "" or node.op == "leaf":
+        if node.leaf_ref != nil:
+            __accumulate_leaf_grad(node.leaf_ref, node.grad)
+        return
+
+    if node.op == "add":
+        let a = node.parents[0]
+        let b = node.parents[1]
+        if a.requires_grad:
+            __accumulate_grad(a, __reduce_to_shape(node.grad, node.ctx["a_shape"]))
+        if b.requires_grad:
+            __accumulate_grad(b, __reduce_to_shape(node.grad, node.ctx["b_shape"]))
+        return
+
+    if node.op == "sub":
+        let a = node.parents[0]
+        let b = node.parents[1]
+        if a.requires_grad:
+            __accumulate_grad(a, __reduce_to_shape(node.grad, node.ctx["a_shape"]))
+        if b.requires_grad:
+            __accumulate_grad(b, __reduce_to_shape(node.grad.mul(-1.0), node.ctx["b_shape"]))
+        return
+
+    if node.op == "mul":
+        let a = node.parents[0]
+        let b = node.parents[1]
+        let lhs = node.ctx["lhs"]
+        let rhs = node.ctx["rhs"]
+        if a.requires_grad:
+            __accumulate_grad(a, __reduce_to_shape(node.grad.mul(rhs), node.ctx["a_shape"]))
+        if b.requires_grad:
+            __accumulate_grad(b, __reduce_to_shape(node.grad.mul(lhs), node.ctx["b_shape"]))
+        return
+
+    if node.op == "div":
+        let a = node.parents[0]
+        let b = node.parents[1]
+        let lhs = node.ctx["lhs"]
+        let rhs = node.ctx["rhs"]
+        if a.requires_grad:
+            __accumulate_grad(a, __reduce_to_shape(node.grad.div(rhs), node.ctx["a_shape"]))
+        if b.requires_grad:
+            let denom = rhs.mul(rhs)
+            let grad_b = node.grad.mul(lhs).div(denom).mul(-1.0)
+            __accumulate_grad(b, __reduce_to_shape(grad_b, node.ctx["b_shape"]))
+        return
+
+    if node.op == "pow":
+        let a = node.parents[0]
+        let b = node.parents[1]
+        let lhs = node.ctx["lhs"]
+        let rhs = node.ctx["rhs"]
+        let out = node.ctx["out"]
+        if a.requires_grad:
+            let grad_a = node.grad.mul(rhs).mul(lhs.pow(rhs.sub(1.0)))
+            __accumulate_grad(a, __reduce_to_shape(grad_a, node.ctx["a_shape"]))
+        if b.requires_grad:
+            let grad_b = node.grad.mul(out).mul(lhs.log())
+            __accumulate_grad(b, __reduce_to_shape(grad_b, node.ctx["b_shape"]))
+        return
+
+    if node.op == "neg":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, node.grad.mul(-1.0))
+        return
+
+    if node.op == "exp":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, node.grad.mul(node.ctx["out"]))
+        return
+
+    if node.op == "log":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, node.grad.div(node.ctx["input"]))
+        return
+
+    if node.op == "relu":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let mask = node.ctx["input"].map(fn(v, idx):
+                if v > 0:
+                    return 1.0
+                return 0.0
+            )
+            __accumulate_grad(parent, node.grad.mul(mask))
+        return
+
+    if node.op == "sigmoid":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let out = node.ctx["out"]
+            __accumulate_grad(parent, node.grad.mul(out).mul(tensor.ones_like(out).sub(out)))
+        return
+
+    if node.op == "tanh":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let out = node.ctx["out"]
+            __accumulate_grad(parent, node.grad.mul(tensor.ones_like(out).sub(out.mul(out))))
+        return
+
+    if node.op == "reshape":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, node.grad.reshape(node.ctx["shape"]))
+        return
+
+    if node.op == "transpose":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, node.grad.transpose())
+        return
+
+    if node.op == "sum":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let scale = __scalar_from_tensor(node.grad)
+            __accumulate_grad(parent, tensor.ones(node.ctx["shape"]).mul(scale))
+        return
+
+    if node.op == "mean":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let scale = __scalar_from_tensor(node.grad) / node.ctx["count"]
+            __accumulate_grad(parent, tensor.ones(node.ctx["shape"]).mul(scale))
+        return
+
+    if node.op == "sum_axis":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, __expanded_axis_grad(node.grad, node.ctx["shape"], node.ctx["axis"], node.ctx["keepdim"]))
+        return
+
+    if node.op == "mean_axis":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let expanded = __expanded_axis_grad(node.grad, node.ctx["shape"], node.ctx["axis"], node.ctx["keepdim"])
+            __accumulate_grad(parent, expanded.div(node.ctx["count"]))
+        return
+
+    if node.op == "matmul":
+        let a = node.parents[0]
+        let b = node.parents[1]
+        let lhs = node.ctx["lhs"]
+        let rhs = node.ctx["rhs"]
+        let grad = node.grad
+        let lhs_rank = lhs.rank()
+        let rhs_rank = rhs.rank()
+        if lhs_rank == 2 and rhs_rank == 2:
+            if a.requires_grad:
+                __accumulate_grad(a, grad.matmul(rhs.transpose()))
+            if b.requires_grad:
+                __accumulate_grad(b, lhs.transpose().matmul(grad))
+            return
+        if lhs_rank == 2 and rhs_rank == 1:
+            if a.requires_grad:
+                __accumulate_grad(a, grad.unsqueeze(1).matmul(rhs.unsqueeze(0)))
+            if b.requires_grad:
+                __accumulate_grad(b, lhs.transpose().matmul(grad))
+            return
+        if lhs_rank == 1 and rhs_rank == 2:
+            if a.requires_grad:
+                __accumulate_grad(a, grad.matmul(rhs.transpose()))
+            if b.requires_grad:
+                __accumulate_grad(b, lhs.unsqueeze(1).matmul(grad.unsqueeze(0)))
+            return
+        if lhs_rank == 1 and rhs_rank == 1:
+            let scale = __scalar_from_tensor(grad)
+            if a.requires_grad:
+                __accumulate_grad(a, rhs.mul(scale))
+            if b.requires_grad:
+                __accumulate_grad(b, lhs.mul(scale))
+            return
+        panic("autograd.matmul backward only supports rank-1/rank-2 combinations")
+
+    if node.op == "bce_with_logits":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let scale = __scalar_from_tensor(node.grad)
+            let grad_logits = node.ctx["probs"].sub(node.ctx["target"]).div(node.ctx["count"]).mul(scale)
+            __accumulate_grad(parent, grad_logits)
+        return
+
+    if node.op == "cross_entropy_with_logits":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let scale = __scalar_from_tensor(node.grad)
+            var grad_logits = node.ctx["probs"].sub(node.ctx["target"]).div(node.ctx["batch"]).mul(scale)
+            if len(node.ctx["shape"]) == 1:
+                grad_logits = grad_logits.reshape(node.ctx["shape"])
+            __accumulate_grad(parent, grad_logits)
+        return
+
+    panic("autograd backward unknown op '{node.op}'")
+
+fn __build_topology(node, seen, order, nodes):
+    let key = str(node.id)
+    if seen[key] == true:
+        return
+    seen[key] = true
+    nodes[key] = node
+    for parent in node.parents:
+        __build_topology(parent, seen, order, nodes)
+    order.push(node.id)
+
+fn __accumulate_grad(node, grad):
+    if not node.requires_grad:
+        return
+    let g = __as_tensor(grad)
+    if node.grad == nil:
+        node.grad = g.clone()
+    else:
+        node.grad.add_(g)
+
+fn __accumulate_leaf_grad(leaf_ref, grad):
+    if leaf_ref == nil:
+        return
+    let g = __as_tensor(grad)
+    if leaf_ref.grad == nil:
+        leaf_ref.grad = g.clone()
+    else:
+        leaf_ref.grad.add_(g)
+
+fn __initial_gradient(value, gradient):
+    if gradient == nil:
+        if value.data.len() != 1:
+            panic("autograd.backward requires scalar output or explicit gradient")
+        return tensor.ones_like(value.data)
+    var g = gradient
+    if __type_of(g) == "instance" and g.kind == "variable":
+        g = g.data
+    g = __as_tensor(g)
+    if not __same_shape(g.shape(), value.data.shape()):
+        panic("autograd.backward gradient shape must match output shape")
+    return g
+
+fn __expanded_axis_grad(grad, shape, axis: Int, keepdim: Bool):
+    var g = __as_tensor(grad)
+    if not keepdim and len(shape) > 1:
+        g = g.unsqueeze(axis)
+    return tensor.ones(shape).mul(g)
+
+fn __reduce_to_shape(grad, shape):
+    let target_shape = to_list(shape)
+    var g = __as_tensor(grad)
+    if __same_shape(g.shape(), target_shape):
+        return g
+
+    while g.rank() > len(target_shape):
+        g = __as_tensor(g.sum_axis(0))
+
+    var axis = 0
+    while axis < len(target_shape):
+        let gshape = g.shape()
+        if gshape[axis] == target_shape[axis]:
+            axis += 1
+            continue
+        if target_shape[axis] == 1:
+            g = __as_tensor(g.sum_axis(axis, true))
+            axis += 1
+            continue
+        panic("autograd.reduce_to_shape incompatible gradient shape")
+
+    if __same_shape(g.shape(), target_shape):
+        return g
+    return g.reshape(target_shape)
+
+fn __binary_target_tensor(target, logits_shape):
+    let t = __as_tensor(target)
+    if __same_shape(t.shape(), logits_shape):
+        return t
+    if len(logits_shape) == 2 and logits_shape[1] == 1 and t.rank() == 1 and t.shape()[0] == logits_shape[0]:
+        return t.reshape(logits_shape)
+    if len(logits_shape) == 1 and t.rank() == 2 and t.shape()[0] == logits_shape[0] and t.shape()[1] == 1:
+        return t.reshape(logits_shape)
+    panic("autograd.bce_with_logits target shape mismatch")
+
+fn __class_target_tensor(target, logits_shape):
+    let t = __as_tensor(target)
+    let rows = logits_shape[0]
+    let cols = logits_shape[1]
+    if t.rank() == 2:
+        if not __same_shape(t.shape(), logits_shape):
+            panic("autograd.cross_entropy_with_logits one-hot target shape mismatch")
+        return t
+    if t.rank() == 1:
+        if t.shape()[0] != rows:
+            panic("autograd.cross_entropy_with_logits target length mismatch")
+        return tensor.one_hot(t.to_flat_list(), cols)
+    panic("autograd.cross_entropy_with_logits targets must be rank-1 labels or rank-2 one-hot")
+
+fn __normalize_axis(axis: Int, rank: Int):
+    var out = axis
+    if out < 0:
+        out += rank
+    if out < 0 or out >= rank:
+        panic("autograd axis out of range")
+    return out
+
+fn __scalar_from_tensor(t) -> Float64:
+    let tt = __as_tensor(t)
+    if tt.len() != 1:
+        panic("autograd expected scalar tensor")
+    return float(tt.to_flat_list()[0])
+
+fn __same_shape(a, b):
+    if len(a) != len(b):
+        return false
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            return false
+        i += 1
+    return true
+
+fn __ensure_variable(value):
+    if __type_of(value) == "instance" and value.kind == "variable":
+        return value
+    return variable(value, false)
+
+fn __as_tensor(value):
+    if __type_of(value) == "instance" and value.kind == "variable":
+        return value.data
+    return tensor.tensor(value)
