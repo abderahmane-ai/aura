@@ -20,7 +20,8 @@
         "run:classes_oop": "npm run build && node dist/main.js run ../examples/classes_oop.aura",
         "run:native_data_structures": "npm run build && node dist/main.js run ../examples/native_data_structures.aura",
         "run:imports_map_filter": "npm run build && node dist/main.js run ../examples/imports_map_filter.aura",
-        "run:math_library": "npm run build && node dist/main.js run ../examples/math_library.aura"
+        "run:math_library": "npm run build && node dist/main.js run ../examples/math_library.aura",
+        "run:logistic_heart": "npm run build && node dist/main.js run ../examples/logistic_heart_csv.aura"
     },
     "devDependencies": {
         "tsx": "^4.7.1",

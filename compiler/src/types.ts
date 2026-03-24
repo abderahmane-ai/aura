@@ -8,15 +8,13 @@ export type TT =
     | 'BANG' | 'QUESTION' | 'COALESCE' | 'COLON' | 'COMMA' | 'SEMICOLON'
     | 'LPAREN' | 'RPAREN' | 'LBRACKET' | 'RBRACKET' | 'LBRACE' | 'RBRACE'
     | 'NEWLINE' | 'INDENT' | 'DEDENT'
-    | 'LT_ANGLE' | 'GT_ANGLE'  // generic params < >
     | 'AMP' | 'PIPE'           // & |
     | 'LET' | 'VAR' | 'FN' | 'RETURN' | 'IF' | 'ELIF' | 'ELSE'
     | 'FOR' | 'IN' | 'WHILE' | 'REPEAT' | 'CADENCE' | 'BREAK' | 'CONTINUE'
     | 'INDEXED' | 'BY'
     | 'CONSTRAINT' | 'REQUIRE' | 'UNIT' | 'MEASURE' | 'FACET' | 'ADOPTS'
-    | 'CLASS' | 'STRUCT' | 'INTERFACE' | 'TRAIT' | 'IMPL' | 'ENUM' | 'ACTOR'
+    | 'CLASS' | 'INTERFACE' | 'TRAIT' | 'IMPL' | 'ENUM'
     | 'SELF' | 'IMPORT' | 'FROM' | 'AS' | 'MODULE' | 'PUB' | 'MUT' | 'WEAK'
-    | 'ASYNC' | 'AWAIT' | 'SPAWN' | 'SELECT'
     | 'MATCH' | 'CASE' | 'AND' | 'OR' | 'NOT'
     | 'TRY' | 'CATCH' | 'THROW' | 'DEFER' | 'WHERE' | 'IS'
     | 'EOF';
@@ -52,7 +50,7 @@ export interface LetStmt { kind: 'LetStmt'; name: string; typeAnn?: ASTNode; val
 export interface VarStmt { kind: 'VarStmt'; name: string; typeAnn?: ASTNode; value?: ASTNode; line: number; }
 export interface AssignStmt { kind: 'AssignStmt'; target: ASTNode; value: ASTNode; line: number; }
 export interface AugAssignStmt { kind: 'AugAssignStmt'; target: ASTNode; op: string; value: ASTNode; line: number; }
-export interface FnDecl { kind: 'FnDecl'; name: string; params: Param[]; retType?: ASTNode; body: Block; isAsync: boolean; typeParams: string[]; line: number; }
+export interface FnDecl { kind: 'FnDecl'; name: string; params: Param[]; retType?: ASTNode; body: Block; line: number; }
 export interface ReturnStmt { kind: 'ReturnStmt'; value?: ASTNode; line: number; }
 export interface ClassDecl { kind: 'ClassDecl'; name: string; fields: FieldDef[]; methods: FnDecl[]; line: number; }
 export interface InterfaceDecl { kind: 'InterfaceDecl'; name: string; methods: FnDecl[]; line: number; }

@@ -6,7 +6,7 @@ Aura is an audited, experimental programming language built as a creative R&D pr
 
 [![CI](https://img.shields.io/github/actions/workflow/status/abderahmane-ai/aura/ci.yml?branch=main&label=CI)](https://github.com/abderahmane-ai/aura/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Language](https://img.shields.io/badge/language-Aura-1f6feb)](./docs/SYNTAX_QUICKSTART.md)
+[![Language](https://img.shields.io/badge/language-Aura-1f6feb)](./docs/LANGUAGE.md)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue)](./docs/INSTALL.md)
 
 ## Why Aura
@@ -15,6 +15,8 @@ Aura is an audited, experimental programming language built as a creative R&D pr
 - Native data structures and advanced iteration primitives.
 - Language ideas tested quickly through an auditable compiler + VM stack.
 - Full playground repo with runnable examples and editor tooling.
+
+Unsupported today: generics, `async`/`await`, `struct`, `actor`, `spawn`, and `select`.
 
 ## Signature Features
 
@@ -34,7 +36,7 @@ Aura is an audited, experimental programming language built as a creative R&D pr
 - `stdlib/`: standard Aura modules (`std.math`, `std.io`, `std.fs`, `std.json`, `std.time`, `std.collections`, `std.test`, `std.schema`)
 - `editor/vscode/`: syntax highlighting, snippets, icon theme, non-LSP IntelliSense
 - `examples/`: language demos by topic
-- `docs/`: install, syntax, tooling, architecture notes
+- `docs/`: install, language reference, tooling, roadmap
 - `scripts/`: local install/uninstall/release helper scripts
 
 ## Quick Start
@@ -91,12 +93,9 @@ fn main():
 ## Documentation
 
 - [Install Guide](./docs/INSTALL.md)
-- [Syntax Quickstart](./docs/SYNTAX_QUICKSTART.md)
-- [Stdlib Reference](./docs/STDLIB.md)
+- [Language Reference](./docs/LANGUAGE.md)
 - [Tooling](./docs/TOOLING.md)
-- [Implementation Plan](./docs/IMPLEMENTATION_PLAN.md)
-- [Performance Notes](./docs/PERFORMANCE.md)
-- [Spec Draft](./docs/SPEC.md)
+- [Roadmap](./docs/ROADMAP.md)
 
 ## Quality Gates
 

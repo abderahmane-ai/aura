@@ -47,7 +47,7 @@ export class Parser {
     // ─── Top-level items ────────────────────────────────────────────────────────
     private parseTopLevel(): ASTNode {
         const t = this.peek();
-        if (t.type === 'FN' || (t.type === 'ASYNC' && this.peekAt(1).type === 'FN')) return this.parseFnDecl(false);
+        if (t.type === 'FN') return this.parseFnDecl(false);
         if (t.type === 'CLASS') return this.parseClassDecl();
         if (t.type === 'INTERFACE') return this.parseInterfaceDecl();
         if (t.type === 'TRAIT') return this.parseTraitDecl();
@@ -79,8 +79,7 @@ export class Parser {
             case 'AS': return this.parseAsFacetBlock();
             case 'BREAK': this.advance(); this.skipNewlines(); return { kind: 'BreakStmt', line: t.line };
             case 'CONTINUE': this.advance(); this.skipNewlines(); return { kind: 'ContinueStmt', line: t.line };
-            case 'FN':
-            case 'ASYNC': return this.parseFnDecl(false);
+            case 'FN': return this.parseFnDecl(false);
             case 'CLASS': return this.parseClassDecl();
             case 'IMPL': return this.parseImplDecl();
             case 'TRAIT': return this.parseTraitDecl();
@@ -454,11 +453,8 @@ export class Parser {
 
     // ─── Declarations ────────────────────────────────────────────────────────────
     parseFnDecl(_insideClass: boolean, allowDeclOnly = false): FnDecl {
-        let isAsync = false;
-        if (this.check('ASYNC')) { isAsync = true; this.advance(); }
         const line = this.advance().line; // consume 'fn'
         const name = this.expectIdent();
-        const typeParams = this.parseTypeParams();
         const params = this.parseParams();
         let retType: ASTNode | undefined;
         if (this.check('ARROW')) { this.advance(); retType = this.parseTypeExpr(); }
@@ -477,7 +473,7 @@ export class Parser {
         } else {
             parseError('Expected function body (`:` block or `= expr`)', this.peek(), this.file);
         }
-        return { kind: 'FnDecl', name, params, retType, body, isAsync, typeParams, line };
+        return { kind: 'FnDecl', name, params, retType, body, line };
     }
 
     private parseParams(): Param[] {
@@ -498,20 +494,6 @@ export class Parser {
         return params;
     }
 
-    private parseTypeParams(): string[] {
-        const params: string[] = [];
-        if (!this.check('LT')) return params;
-        this.advance();
-        let depth = 1;
-        while (depth > 0 && !this.check('EOF')) {
-            const t = this.advance();
-            if (t.type === 'LT') depth++;
-            else if (t.type === 'GT') depth--;
-            else if (t.type === 'IDENT' && depth === 1) params.push(t.value);
-        }
-        return params;
-    }
-
     private parseClassDecl(): ClassDecl {
         const line = this.advance().line; // 'class'
         const name = this.expectIdent();
@@ -524,7 +506,7 @@ export class Parser {
         while (!this.check('DEDENT') && !this.check('EOF')) {
             this.skipNewlines();
             if (this.check('DEDENT') || this.check('EOF')) break;
-            if (this.check('FN') || this.check('ASYNC') ||
+            if (this.check('FN') ||
                 (this.check('PUB') && this.peekAt(1).type === 'FN')) {
                 if (this.check('PUB')) this.advance();
                 methods.push(this.parseFnDecl(true, true));
@@ -572,7 +554,7 @@ export class Parser {
         while (!this.check('DEDENT') && !this.check('EOF')) {
             this.skipNewlines();
             if (this.check('DEDENT') || this.check('EOF')) break;
-            if (this.check('FN') || this.check('ASYNC')) {
+            if (this.check('FN')) {
                 methods.push(this.parseFnDecl(true, true));
             } else { this.advance(); this.skipNewlines(); }
         }
@@ -590,7 +572,7 @@ export class Parser {
         while (!this.check('DEDENT') && !this.check('EOF')) {
             this.skipNewlines();
             if (this.check('DEDENT') || this.check('EOF')) break;
-            if (this.check('FN') || this.check('ASYNC')) {
+            if (this.check('FN')) {
                 methods.push(this.parseFnDecl(true, true));
             } else { this.advance(); this.skipNewlines(); }
         }
@@ -617,7 +599,7 @@ export class Parser {
         while (!this.check('DEDENT') && !this.check('EOF')) {
             this.skipNewlines();
             if (this.check('DEDENT') || this.check('EOF')) break;
-            if (this.check('FN') || this.check('ASYNC')) {
+            if (this.check('FN')) {
                 methods.push(this.parseFnDecl(true));
             } else { this.advance(); this.skipNewlines(); }
         }
@@ -628,7 +610,6 @@ export class Parser {
     private parseEnumDecl(): EnumDecl {
         const line = this.advance().line;
         const name = this.expectIdent();
-        this.parseTypeParams(); // skip
         this.expect('COLON');
         this.skipNewlines();
         this.expect('INDENT');
@@ -707,8 +688,6 @@ export class Parser {
             params: [{ name: paramName }],
             retType: undefined,
             body: { kind: 'Block', stmts },
-            isAsync: false,
-            typeParams: [],
             line,
         };
     }
@@ -802,7 +781,7 @@ export class Parser {
         while (!this.check('DEDENT') && !this.check('EOF')) {
             this.skipNewlines();
             if (this.check('DEDENT') || this.check('EOF')) break;
-            if (this.check('FN') || this.check('ASYNC') ||
+            if (this.check('FN') ||
                 (this.check('PUB') && this.peekAt(1).type === 'FN')) {
                 if (this.check('PUB')) this.advance();
                 methods.push(this.parseFnDecl(true, true));
@@ -1134,14 +1113,6 @@ export class Parser {
             base = inner;
         } else {
             base = { kind: 'NilLit', line: this.peek().line }; // fallback
-        }
-        // Skip generic params: <T, E>
-        if (this.check('LT')) {
-            let depth = 1; this.advance();
-            while (depth > 0 && !this.check('EOF')) {
-                if (this.advance().type === 'LT') depth++;
-                else if (this.tokens[this.pos - 1].type === 'GT') depth--;
-            }
         }
         // Optional postfix ?
         if (this.check('QUESTION')) this.advance();

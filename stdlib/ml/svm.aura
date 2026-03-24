@@ -4,6 +4,7 @@ import std.tensor as tensor
 import std.optim as optim
 import std.math as math
 import std.ml.metrics as metrics
+import std.ml.common as common
 import std.fs as fs
 
 let DEFAULT_L2 = 0.001
@@ -433,10 +434,7 @@ fn __dot_col(x_row, w_rows, col_idx: Int):
     return acc
 
 fn __validate_input_shape(model, x):
-    if x.rank() != 2:
-        panic("svm expects input rank-2 [n, d]")
-    if x.shape()[1] != model["input_dim"]:
-        panic("svm input_dim mismatch")
+    common.validate_input_shape("svm", x, model["input_dim"])
 
 fn __validate_dataset_for_model(model, x, t):
     __validate_input_shape(model, x)
@@ -472,10 +470,7 @@ fn __argmax_row(row):
     return best_i
 
 fn __ensure_multiclass_labels(values, num_classes: Int):
-    for v in values:
-        let iv = int(v)
-        if v != iv or iv < 0 or iv >= num_classes:
-            panic("svm multiclass labels must be integers in [0, num_classes-1]")
+    common.ensure_multiclass_labels("svm multiclass", values, num_classes)
 
 fn __indices(n: Int, do_shuffle: Bool, seed: Int):
     let idx = []
@@ -505,12 +500,7 @@ fn __class_model(instance):
     return {"input_dim": instance.input_dim, "num_classes": instance.num_classes, "W": instance.W, "b": instance.b}
 
 fn __opt(options, key: String, fallback):
-    if options == nil:
-        return fallback
-    let value = options[key]
-    if value == nil:
-        return fallback
-    return value
+    return common.opt(options, key, fallback)
 
 fn __serialize_model(model):
     return {"version": SERIAL_VERSION, "kind": "svm", "input_dim": model["input_dim"], "num_classes": model["num_classes"], "W": __tensor_state(model["W"]), "b": __tensor_state(model["b"])}

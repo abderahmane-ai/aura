@@ -1,6 +1,7 @@
 module std.data.table
 
 import std.tensor as tensor
+import std.math as math
 
 class Table:
     let columns
@@ -44,6 +45,12 @@ class Table:
     fn with_column(name: String, values):
         return __with_column(self, name, values)
 
+    fn feature_cols(target_col: String):
+        return __feature_cols(self, target_col)
+
+    fn train_test_split(test_ratio: Float64 = 0.2, shuffle: Bool = true, seed: Int = 42):
+        return __train_test_split(self, test_ratio, shuffle, seed)
+
     fn to_tensors(feature_cols, target_col = nil):
         return __to_tensors(self, feature_cols, target_col)
 
@@ -52,6 +59,12 @@ fn table(columns, rows, types = nil, meta = nil):
 
 fn from_rows(columns, rows, types = nil, meta = nil):
     return Table(columns, rows, types, meta)
+
+fn feature_cols(tbl, target_col: String):
+    return __feature_cols(tbl, target_col)
+
+fn train_test_split(tbl, test_ratio: Float64 = 0.2, shuffle: Bool = true, seed: Int = 42):
+    return __train_test_split(tbl, test_ratio, shuffle, seed)
 
 fn __clone_rows(rows):
     let out = []
@@ -162,6 +175,44 @@ fn __with_column(tbl, name: String, values):
         out_rows.push(row)
         i += 1
     return Table(out_cols, out_rows, [], tbl.meta)
+
+fn __feature_cols(tbl, target_col: String):
+    let out = []
+    for name in tbl.columns:
+        if name != target_col:
+            out.push(name)
+    return out
+
+fn __train_test_split(tbl, test_ratio: Float64, shuffle: Bool, seed: Int):
+    if test_ratio <= 0 or test_ratio >= 1:
+        panic("table.train_test_split expects 0 < test_ratio < 1")
+    let n = len(tbl.rows)
+    if n < 2:
+        panic("table.train_test_split expects at least 2 rows")
+    var idx = []
+    var i = 0
+    while i < n:
+        idx.push(i)
+        i += 1
+    if shuffle:
+        let rng = math.rng(seed)
+        idx = math.shuffle(rng, idx)
+    var test_n = int(float(n) * test_ratio)
+    if test_n < 1:
+        test_n = 1
+    if test_n >= n:
+        test_n = n - 1
+    let train_rows = []
+    let test_rows = []
+    i = 0
+    while i < len(idx):
+        let row = to_list(tbl.rows[idx[i]])
+        if i < test_n:
+            test_rows.push(row)
+        else:
+            train_rows.push(row)
+        i += 1
+    return {"train": Table(tbl.columns, train_rows, tbl.types, tbl.meta), "test": Table(tbl.columns, test_rows, tbl.types, tbl.meta)}
 
 fn __to_tensors(tbl, feature_cols, target_col = nil):
     let indices = __select_indices(tbl, feature_cols)

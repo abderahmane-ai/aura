@@ -3,6 +3,7 @@ module std.ml.naive_bayes
 import std.tensor as tensor
 import std.math as math
 import std.ml.metrics as metrics
+import std.ml.common as common
 import std.fs as fs
 
 let SERIAL_VERSION = 1
@@ -301,48 +302,19 @@ fn __zeros_2d(r: Int, c: Int):
     return out
 
 fn __label_list(t, n: Int):
-    if t.rank() == 1:
-        if t.shape()[0] != n:
-            panic("naive_bayes targets length mismatch")
-        return t.to_flat_list()
-    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
-        return t.flatten().to_flat_list()
-    panic("naive_bayes targets must be rank-1 [n] or rank-2 [n,1]")
+    return common.label_list("naive_bayes", t, n)
 
 fn __ensure_class_labels(labels):
-    for v in labels:
-        let iv = int(v)
-        if v != iv or iv < 0:
-            panic("naive_bayes labels must be non-negative integers")
+    common.ensure_class_labels("naive_bayes", labels)
 
 fn __infer_classes(labels):
-    var best = -1
-    for v in labels:
-        let iv = int(v)
-        if iv > best:
-            best = iv
-    return best + 1
+    return common.infer_classes(labels)
 
 fn __argmax(values):
-    var best_i = 0
-    var best_v = values[0]
-    var i = 1
-    while i < len(values):
-        if values[i] > best_v:
-            best_v = values[i]
-            best_i = i
-        i += 1
-    return best_i
+    return common.argmax(values)
 
 fn __validate_dataset(x, t):
-    if x.rank() != 2:
-        panic("naive_bayes expects input rank-2 [n, d]")
-    let n = x.shape()[0]
-    if t.rank() == 1 and t.shape()[0] == n:
-        return
-    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
-        return
-    panic("naive_bayes targets must be [n] or [n,1]")
+    common.validate_dataset("naive_bayes", x, t)
 
 fn __serialize_model(model):
     return {"version": SERIAL_VERSION, "kind": "naive_bayes", "variant": model.variant, "alpha": model.alpha, "eps": model.eps, "num_classes": model.num_classes, "input_dim": model.input_dim, "class_log_prior": model.class_log_prior, "mean": model.mean, "variance": model.variance, "feature_log_prob": model.feature_log_prob}
@@ -363,9 +335,4 @@ fn __deserialize_model(data):
     return inst
 
 fn __opt(options, key: String, fallback):
-    if options == nil:
-        return fallback
-    let value = options[key]
-    if value == nil:
-        return fallback
-    return value
+    return common.opt(options, key, fallback)

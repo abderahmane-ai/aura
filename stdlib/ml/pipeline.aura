@@ -1,14 +1,7 @@
 module std.ml.pipeline
 
-import std.data.table as table
 import std.ml.preprocess as preprocess
-import std.ml.logistic as logistic
-import std.ml.linear as linear
-import std.ml.svm as svm
-import std.ml.knn as knn
-import std.ml.tree as tree
-import std.ml.forest as forest
-import std.ml.naive_bayes as naive_bayes
+import std.ml.registry as registry
 import std.fs as fs
 
 class Pipeline:
@@ -29,7 +22,7 @@ class Pipeline:
             step.fit(cur)
             cur = step.transform(cur)
         if self.feature_cols == nil:
-            self.feature_cols = __feature_cols(cur, self.target_col)
+            self.feature_cols = cur.feature_cols(self.target_col)
         let tensors = cur.to_tensors(self.feature_cols, self.target_col)
         self.estimator.fit(tensors["X"], tensors["y"], options)
         return self
@@ -74,18 +67,11 @@ fn load(path: String):
     let data = fs.read_json(path)
     return __deserialize_pipeline(data)
 
-fn __feature_cols(tbl, target_col: String):
-    let out = []
-    for name in tbl.columns:
-        if name != target_col:
-            out.push(name)
-    return out
-
 fn __serialize_pipeline(pipe):
     let steps_data = []
     for step in pipe.steps:
         steps_data.push(preprocess.serialize(step))
-    let estimator_data = __serialize_estimator(pipe.estimator)
+    let estimator_data = registry.serialize_estimator(pipe.estimator)
     return {"version": 1, "kind": "pipeline", "target_col": pipe.target_col, "feature_cols": pipe.feature_cols, "steps": steps_data, "estimator": estimator_data}
 
 fn __deserialize_pipeline(data):
@@ -94,41 +80,5 @@ fn __deserialize_pipeline(data):
     let steps = []
     for step_data in data["steps"]:
         steps.push(preprocess.deserialize(step_data))
-    let estimator = __deserialize_estimator(data["estimator"])
+    let estimator = registry.deserialize_estimator(data["estimator"])
     return Pipeline(steps, estimator, data["target_col"], data["feature_cols"])
-
-fn __serialize_estimator(estimator):
-    let kind = estimator.kind
-    if kind == "logistic":
-        return logistic.serialize(estimator)
-    if kind == "linear":
-        return linear.serialize(estimator)
-    if kind == "svm":
-        return svm.serialize(estimator)
-    if kind == "knn":
-        return knn.serialize(estimator)
-    if kind == "tree":
-        return tree.serialize(estimator)
-    if kind == "forest":
-        return forest.serialize(estimator)
-    if kind == "naive_bayes":
-        return naive_bayes.serialize(estimator)
-    panic("pipeline.save unknown estimator kind '{kind}'")
-
-fn __deserialize_estimator(data):
-    let kind = data["kind"]
-    if kind == "logistic":
-        return logistic.deserialize(data)
-    if kind == "linear":
-        return linear.deserialize(data)
-    if kind == "svm":
-        return svm.deserialize(data)
-    if kind == "knn":
-        return knn.deserialize(data)
-    if kind == "tree":
-        return tree.deserialize(data)
-    if kind == "forest":
-        return forest.deserialize(data)
-    if kind == "naive_bayes":
-        return naive_bayes.deserialize(data)
-    panic("pipeline.load unknown estimator kind '{kind}'")

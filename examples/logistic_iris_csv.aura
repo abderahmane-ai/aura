@@ -1,57 +1,12 @@
 import std.io as io
-import std.fs as fs
-import std.data.csv as csv
-import std.data.table as table
-import std.math as math
 import std.ml.preprocess as prep
 import std.ml.pipeline as pipeline
 import std.ml.logistic as logistic
-
-fn split_table(tbl, test_ratio: Float64 = 0.2, seed: Int = 42):
-    if test_ratio <= 0 or test_ratio >= 1:
-        panic("split_table expects test_ratio between 0 and 1")
-    let rows = tbl.rows
-    let n = len(rows)
-    if n < 2:
-        panic("split_table expects at least 2 rows")
-
-    let idx = []
-    var i = 0
-    while i < n:
-        idx.push(i)
-        i += 1
-
-    let rng = math.rng(seed)
-    let shuffled = math.shuffle(rng, idx)
-
-    var test_n = int(float(n) * test_ratio)
-    if test_n < 1:
-        test_n = 1
-    if test_n >= n:
-        test_n = n - 1
-
-    let train_rows = []
-    let test_rows = []
-    var j = 0
-    while j < len(shuffled):
-        let k = shuffled[j]
-        if j < test_n:
-            test_rows.push(to_list(rows[k]))
-        else:
-            train_rows.push(to_list(rows[k]))
-        j += 1
-
-    let train_tbl = table.table(tbl.columns, train_rows, tbl.types, tbl.meta)
-    let test_tbl = table.table(tbl.columns, test_rows, tbl.types, tbl.meta)
-    return {"train": train_tbl, "test": test_tbl}
+import support.datasets as datasets
 
 fn main():
-    let raw = fs.read_text("../data/iris.raw").trim()
-    let header = "sepal_length,sepal_width,petal_length,petal_width,species"
-    let csv_text = header + "\n" + raw.replace(" ", "\n")
-    let tbl = csv.parse(csv_text, {"header": true, "trim": true, "skip_empty": true})
-
-    let split = split_table(tbl, 0.2, 12)
+    let tbl = datasets.iris_table()
+    let split = tbl.train_test_split(0.2, true, 12)
 
     let scaler = prep.standard_scaler(["sepal_length", "sepal_width", "petal_length", "petal_width"])
     let encoder = prep.label_encoder("species")

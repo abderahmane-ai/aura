@@ -3,7 +3,7 @@ import std.io as io
 facet Editor:
     let permissions = ["read", "write"]
 
-    fn annotate(note: String):
+    fn aonnotate(note: String):
         io.println("Editor note: {note} perms={self.permissions}")
 
     fn grant(permission: String):

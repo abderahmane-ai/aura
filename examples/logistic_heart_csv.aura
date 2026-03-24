@@ -1,0 +1,180 @@
+import std.io as io
+import std.fs as fs
+import std.data.csv as csv
+import std.data.table as table
+import std.math as math
+import std.ml.preprocess as prep
+import std.ml.pipeline as pipeline
+import std.ml.logistic as logistic
+
+# ─── Helper: stratified train/test split ─────────────────────────────────────
+
+fn split_table(tbl, test_ratio: Float64 = 0.2, seed: Int = 42):
+    if test_ratio <= 0 or test_ratio >= 1:
+        panic("split_table: test_ratio must be between 0 and 1")
+    let rows = tbl.rows
+    let n = len(rows)
+    if n < 4:
+        panic("split_table: need at least 4 rows")
+
+    let rng = math.rng(seed)
+    let idx = []
+    var i = 0
+    while i < n:
+        idx.push(i)
+        i += 1
+    let shuffled = math.shuffle(rng, idx)
+
+    var test_n = int(float(n) * test_ratio)
+    if test_n < 1:
+        test_n = 1
+    if test_n >= n:
+        test_n = n - 1
+
+    let train_rows = []
+    let test_rows = []
+    var j = 0
+    while j < len(shuffled):
+        let k = shuffled[j]
+        if j < test_n:
+            test_rows.push(to_list(rows[k]))
+        else:
+            train_rows.push(to_list(rows[k]))
+        j += 1
+
+    let train_tbl = table.table(tbl.columns, train_rows, tbl.types, tbl.meta)
+    let test_tbl  = table.table(tbl.columns, test_rows,  tbl.types, tbl.meta)
+    return {"train": train_tbl, "test": test_tbl}
+
+# ─── Helper: derive feature list (all columns except target) ──────────────────
+
+fn feature_cols(tbl, target: String):
+    let out = []
+    for col in tbl.columns:
+        if col != target:
+            out.push(col)
+    return out
+
+# ─── Helper: pretty-print confusion matrix ────────────────────────────────────
+
+fn print_confusion_matrix(conf):
+    io.println("  Confusion matrix (rows=actual, cols=predicted):")
+    let k = len(conf)
+    cadence row in conf:
+        start:
+            var r = 0
+        each:
+            let vals = []
+            for v in row:
+                vals.push(str(int(v)))
+            io.println("    [{r}]  " + ",".join(vals))
+            r += 1
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+fn main():
+    io.println("=== Heart Disease Logistic Regression ===")
+    io.println("")
+
+    # ── 1. Load CSV ──────────────────────────────────────────────────────────
+    let csv_text = fs.read_text("../data/heart.csv").trim()
+    let raw_tbl  = csv.parse(csv_text, {"header": true, "trim": true, "skip_empty": true})
+    let n_total  = len(raw_tbl.rows)
+    let n_cols   = len(raw_tbl.columns)
+    io.println("Loaded: {n_total} rows × {n_cols} columns")
+    io.println("Columns: " + ",".join(raw_tbl.columns))
+    io.println("")
+
+    # ── 2. Impute missing values with column mean (ca, thal can have '?') ───
+    #   Restrict to feature columns — must NOT impute the target column or its
+    #   0/1 labels get replaced with a fractional mean, flipping class encoding.
+    let features_early = feature_cols(raw_tbl, "target")
+    let imputer = prep.imputer(features_early, "mean")
+
+    # ── 3. Train/test split (80/20) ──────────────────────────────────────────
+    let split   = split_table(raw_tbl, 0.2, 777)
+    let n_train = len(split["train"].rows)
+    let n_test  = len(split["test"].rows)
+    io.println("Split: {n_train} train / {n_test} test")
+    io.println("")
+
+    # ── 4. Build pipeline:  imputer → standard_scaler → logistic model ─────
+    let target  = "target"
+    let features = feature_cols(raw_tbl, target)
+    let n_feat   = len(features)
+    io.println("Features ({n_feat}): " + ",".join(features))
+    io.println("")
+
+    let scaler = prep.standard_scaler(features)
+    let model  = logistic.model(n_feat, 1)   # binary classification
+    let pipe   = pipeline.pipeline([imputer, scaler], model, target, features)
+
+    # ── 5. Fit ────────────────────────────────────────────────────────────────
+    let options = {"epochs": 300, "lr": 0.1, "batch_size": 32, "l2": 0.001, "seed": 42, "verbose": false}
+    io.println("Training logistic regression ...")
+    pipe.fit(split["train"], options)
+    io.println("Done.")
+    io.println("")
+
+    # ── 6. Evaluate ──────────────────────────────────────────────────────────
+    let train_metrics = pipe.evaluate(split["train"])
+    let test_metrics  = pipe.evaluate(split["test"])
+
+    let tr_loss = train_metrics["loss"]
+    let tr_acc  = train_metrics["accuracy"]
+    let tr_prec = train_metrics["precision"]
+    let tr_rec  = train_metrics["recall"]
+    let tr_f1   = train_metrics["f1"]
+
+    let te_loss = test_metrics["loss"]
+    let te_acc  = test_metrics["accuracy"]
+    let te_prec = test_metrics["precision"]
+    let te_rec  = test_metrics["recall"]
+    let te_f1   = test_metrics["f1"]
+
+    io.println("── Training metrics ─────────────────────")
+    io.println("  loss      = {tr_loss}")
+    io.println("  accuracy  = {tr_acc}")
+    io.println("  precision = {tr_prec}")
+    io.println("  recall    = {tr_rec}")
+    io.println("  f1        = {tr_f1}")
+    io.println("")
+
+    io.println("── Test metrics ─────────────────────────")
+    io.println("  loss      = {te_loss}")
+    io.println("  accuracy  = {te_acc}")
+    io.println("  precision = {te_prec}")
+    io.println("  recall    = {te_rec}")
+    io.println("  f1        = {te_f1}")
+    io.println("")
+
+    print_confusion_matrix(test_metrics["confusion"])
+    io.println("")
+
+    # ── 7. Save model ────────────────────────────────────────────────────────
+    let save_path = "../data/heart_logistic.json"
+    pipe.save(save_path)
+    io.println("Model saved to {save_path}")
+    io.println("")
+
+    # ── 8. Predict on a few hand-crafted examples ────────────────────────────
+    io.println("── Sample predictions ───────────────────")
+    # Build 4 sample rows manually (13 features + 1 dummy target)
+    # age,sex,cp,trestbps,chol,fbs,restecg,thalach,exang,oldpeak,slope,ca,thal,target
+    let s1 = [63, 1, 3, 145, 233, 1, 0, 150, 0, 2.3, 0, 0, 1, 0]
+    let s2 = [35, 0, 1, 110, 180, 0, 1, 175, 0, 0.2, 2, 0, 2, 0]
+    let s3 = [57, 1, 0, 140, 192, 0, 1, 148, 0, 0.4, 1, 0, 1, 0]
+    let s4 = [44, 0, 2, 120, 200, 0, 0, 165, 0, 0.1, 2, 0, 2, 0]
+    let all_sample_cols = to_list(features)
+    all_sample_cols.push("target")
+    let sample_tbl = table.table(all_sample_cols, [s1, s2, s3, s4])
+    let proba = pipe.predict_proba(sample_tbl)
+    let flat  = proba.to_flat_list()
+    let descriptions = ["63yo M high-risk", "35yo F low-risk", "57yo M asymptomatic", "44yo F atypical"]
+    var si = 0
+    for desc in descriptions:
+        let p = float(flat[si])
+        io.println("  sample {si + 1} ({desc}): P(disease)={p}")
+        si += 1
+    io.println("")
+    io.println("Done.")

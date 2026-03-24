@@ -4,6 +4,7 @@ import std.tensor as tensor
 import std.optim as optim
 import std.math as math
 import std.ml.metrics as metrics
+import std.ml.common as common
 import std.fs as fs
 
 let DEFAULT_L2 = 0.001
@@ -228,28 +229,14 @@ fn __resolve_penalty(model, options):
     return {"l1": l1, "l2": l2}
 
 fn __reg_targets(t, n: Int):
-    if t.rank() == 1:
-        if t.shape()[0] != n:
-            panic("linear targets length mismatch")
-        return t
-    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
-        return t.flatten()
-    panic("linear targets must be rank-1 [n] or rank-2 [n,1]")
+    return common.label_tensor("linear", t, n)
 
 fn __validate_input_shape(model, x):
-    if x.rank() != 2:
-        panic("linear expects input rank-2 [n, d]")
-    if x.shape()[1] != model["input_dim"]:
-        panic("linear input_dim mismatch")
+    common.validate_input_shape("linear", x, model["input_dim"])
 
 fn __validate_dataset(model, x, t):
     __validate_input_shape(model, x)
-    let n = x.shape()[0]
-    if t.rank() == 1 and t.shape()[0] == n:
-        return
-    if t.rank() == 2 and t.shape()[0] == n and t.shape()[1] == 1:
-        return
-    panic("linear targets must be [n] or [n,1]")
+    common.validate_target_shape("linear", x, t)
 
 fn __l1_penalty(w, l1: Float64):
     if l1 == 0:
@@ -301,12 +288,7 @@ fn __class_model(instance):
     return {"input_dim": instance.input_dim, "penalty": instance.penalty, "alpha": instance.alpha, "W": instance.W, "b": instance.b}
 
 fn __opt(options, key: String, fallback):
-    if options == nil:
-        return fallback
-    let value = options[key]
-    if value == nil:
-        return fallback
-    return value
+    return common.opt(options, key, fallback)
 
 fn __serialize_model(model):
     return {"version": SERIAL_VERSION, "kind": "linear", "input_dim": model["input_dim"], "penalty": model["penalty"], "alpha": model["alpha"], "W": __tensor_state(model["W"]), "b": __tensor_state(model["b"])}

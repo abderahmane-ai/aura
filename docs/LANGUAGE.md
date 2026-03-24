@@ -3,7 +3,7 @@
 > A low-boilerplate language with native data structures, advanced iteration, and built-in ML capabilities.
 
 **Version:** 0.1.0 (MVP)
-**Status:** Production-ready
+**Status:** Experimental, with a stable implemented core
 
 ---
 
@@ -34,6 +34,20 @@ Aura is designed for programmers who want:
 
 Aura occupies the **Goldilocks zone** between Python's readability and compiled language performance.
 
+### Supported Today
+
+- Core control flow, functions, classes, interfaces, traits, enums, and pattern matching
+- Unique Aura constructs such as `repeat`, `cadence`, `facet`/`adopts`, `constraint`, `unit`, and `indexed`
+- The current data/ML stdlib in `std.tensor`, `std.optim`, `std.data.*`, and `std.ml.*`
+
+### Not Supported Today
+
+- Generics such as `List<T>` or `fn id<T>(x: T)`
+- `async` / `await`
+- `spawn` / `select`
+- `struct`
+- `actor`
+
 ---
 
 ## 2. Getting Started
@@ -42,8 +56,8 @@ Aura occupies the **Goldilocks zone** between Python's readability and compiled 
 
 ```powershell
 # Clone and install
-git clone https://github.com/your-repo/aura.git
-cd aura
+git clone https://github.com/abderahmane-ai/aura.git
+cd AURA
 
 # Install dependencies
 cd compiler

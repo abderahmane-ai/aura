@@ -473,7 +473,7 @@ export class Compiler {
             case 'FnExpr': {
                 const fn = this.compileFnDecl({
                     kind: 'FnDecl', name: '<lambda>', params: node.params,
-                    body: node.body, isAsync: false, typeParams: [], line: node.line,
+                    body: node.body, line: node.line,
                     retType: undefined,
                 });
                 this.emit('PUSH_CONST', this.addConst(fn), node.line);

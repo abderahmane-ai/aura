@@ -1,223 +1,47 @@
-# Aura Language Roadmap
+# Aura Roadmap
 
-> Prioritized plan to complete half-baked features and stabilize the language.
+> Near-term work for the implemented Aura surface.
 
-**Current Version:** 0.1.0 (MVP)
-**Target Version:** 0.2.0 (Stable)
-**Language Status:** Production-ready for ML/Data work; async features are aspirational.
+**Current Version:** 0.1.0
+**Status:** Experimental with a stable implemented core
 
----
+## Current Baseline
 
-## Priority Matrix
+Aura currently supports:
 
-| Priority | Feature | Effort | Impact | Status |
-|----------|---------|--------|--------|--------|
-| P0 | Generics `<T>` | High | High | Parsed only |
-| P1 | `struct` value types | Medium | Medium | Not parsed |
-| P2 | Remove dead keywords | Low | Low | Cleanup |
-| P3 | `async`/`await` | Very High | High | Not parsed |
-| P4 | `actor` model | Very High | High | Not parsed |
-| P5 | Weak references | Medium | Low | Spec only |
+- Core expressions, control flow, functions, classes, interfaces, traits, enums, and pattern matching
+- Aura-specific constructs such as `repeat`, `cadence`, `facet`/`adopts`, `constraint`, `unit`, and `indexed`
+- The current `std.data`, `std.tensor`, `std.optim`, and `std.ml` stack
 
----
+Aura does **not** currently support:
 
-## P0: Generics (High Priority)
+- Generics
+- `async` / `await`
+- `spawn` / `select`
+- `struct`
+- `actor`
 
-### Current State
-- Parser consumes `<T>` syntax but discards it
-- No runtime type parameterization
+Those features are intentionally absent from the supported syntax until they have complete parser, compiler, runtime, and test coverage.
 
-### What to Implement
-```aura
-# Target syntax
-class Stack<T>:
-    var items: List<T> = []
+## Near-Term Priorities
 
-    fn push(item: T):
-        self.items.append(item)
+1. VM and compiler performance
+2. Stronger diagnostics and error consistency
+3. Stdlib cleanup and documentation depth
+4. ML stack hardening, metrics, and model coverage
+5. Tooling polish for the VS Code extension and CLI
 
-    fn pop() -> T?:
-        return self.items.pop()
+## Feature Admission Policy
 
-fn first<T>(items: List<T>) -> T?:
-    return items.len() > 0 ? items[0] : nil
-```
+New syntax should land only when all of the following exist together:
 
-### Implementation Steps
+- Parser support
+- Resolver/compiler support
+- VM/runtime behavior
+- Conformance coverage
+- Documentation
 
-1. **Phase 1: Type Parameter Storage**
-   - Store generic params in class/function AST nodes
-   - Add `typeParams: string[]` to ClassDecl, FnDecl
-
-2. **Phase 2: Type Checking**
-   - Verify type arguments satisfy constraints
-   - Support `T: Trait` bounds
-
-3. **Phase 3: Monomorphization or Boxing**
-   - Option A: Generate specialized code per type (fast, more code)
-   - Option B: Runtime type tagging (slower, less code)
-
-4. **Phase 4: Instantiation**
-   - Handle generic method calls with type args
-
-### Files to Modify
-- `compiler/src/parser.ts` — Store type params in AST
-- `compiler/src/resolver.ts` — Type param validation
-- `compiler/src/compiler.ts` — Code generation
-- `compiler/src/vm.ts` — Optional: boxed generic values
-
----
-
-## P1: `struct` Value Types (Medium Priority)
-
-### Current State
-- Token `STRUCT` exists in lexer (line 13)
-- No parsing logic — will error if used
-
-### What to Implement
-```aura
-struct Point:
-    let x: Float64
-    let y: Float64
-
-    fn distance_to(other: Point) -> Float64:
-        return ((self.x - other.x) ** 2 + (self.y - other.y) ** 2).sqrt()
-
-fn main():
-    let p1 = Point(1.0, 2.0)
-    let p2 = Point(3.0, 4.0)
-
-    # Copy semantics (not reference)
-    let p3 = p1  # copies the values
-    p3.x = 10    # p1.x still 1.0
-```
-
-### Implementation Steps
-
-1. **Phase 1: Parsing**
-   - Add `parseStructDecl()` in parser.ts
-   - Similar to class but immutable fields by default
-
-2. **Phase 2: Compiler**
-   - Emit different bytecode for struct vs class
-   - Use copy operations instead of reference
-
-3. **Phase 3: VM**
-   - Add struct instantiation
-   - Handle struct field access with copy semantics
-
-### Key Difference from Class
-| Aspect | Class | Struct |
-|--------|-------|--------|
-| Allocation | Heap (reference) | Stack or inline |
-| Assignment | Copies reference | Copies values |
-| Mutability | `var` fields | Immutable by default |
-| Identity | `==` compares references | `==` compares values |
-
----
-
-## P2: Remove Dead Keywords (Low Priority — Cleanup)
-
-### Current State
-These keywords exist in lexer but have no parsing:
-
-| Keyword | Lines in lexer.ts | Action |
-|---------|-------------------|--------|
-| `struct` | 13 | Implement or remove |
-| `actor` | 14 | Remove (future feature) |
-| `spawn` | 17 | Remove (tied to async) |
-| `select` | 17 | Remove (tied to async) |
-
-### Recommended Actions
-
-**Option A: Remove for 0.2.0**
-```typescript
-// Remove these from KEYWORDS in lexer.ts:
-// struct: 'STRUCT',
-// actor: 'ACTOR',
-// spawn: 'SPAWN',
-// select: 'SELECT',
-```
-
-**Option B: Keep with deprecation warning**
-- Keep in lexer but emit warning if used
-
-### Recommendation
-Remove all async-related keywords (`spawn`, `select`) since async is not planned for 0.2.0.
-Keep `struct` for P1 implementation.
-Remove `actor` (too ambitious for near-term).
-
----
-
-## P3: `async`/`await` (Very High Priority — Long Term)
-
-### Current State
-- Token exists in lexer (line 17)
-- No parsing, no runtime
-
-### Scope
-This is a major feature requiring:
-- [ ] Async runtime (event loop, task queue)
-- [ ] `async fn` parsing and compilation
-- [ ] `await` expression desugaring
-- [ ] Task spawning and joining
-- [ ] Promise/Future type
-- [ ] Concurrent I/O (non-blocking file, network)
-
-### Estimated Effort
-- 2-4 months for basic implementation
-- Full async I/O: 6+ months
-
-### For Now: Document as Future Feature
-Add to docs that async/await is **planned for version 0.3.0**.
-
----
-
-## P4: `actor` Model (Very High Priority — Long Term)
-
-### Current State
-- Keyword exists in lexer
-- No parsing, no runtime
-
-### What It Would Look Like
-```aura
-actor Counter:
-    var count: Int = 0
-
-    fn increment():
-        self.count += 1
-
-    fn get() -> Int:
-        return self.count
-```
-
-### Scope
-- Message passing between actors
-- Actor mailbox/queue
-- Thread safety guarantees
-- Actor supervision
-
-### Recommendation
-Defer to version 0.4.0+ — requires major runtime changes.
-
----
-
-## P5: Weak References (Low Priority)
-
-### Current State
-- Not in lexer at all
-- Only in SPEC.md aspirational docs
-
-### What It Would Look Like
-```aura
-class Node:
-    var value: Int
-    var next: Node? = nil
-    weak var parent: Node? = nil  # does not retain
-```
-
-### Implementation
-- Requires reference counting in VM
+Aura avoids exposing placeholder syntax that only partially works.
 - Track weak references separately
 - Clear when target is deallocated
 

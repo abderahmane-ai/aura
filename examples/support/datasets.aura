@@ -1,0 +1,26 @@
+module support.datasets
+
+import std.fs as fs
+import std.data.csv as csv
+
+let WDBC_HEADER = "id,diagnosis,mean_radius,mean_texture,mean_perimeter,mean_area,mean_smoothness,mean_compactness,mean_concavity,mean_concave_points,mean_symmetry,mean_fractal_dimension,radius_se,texture_se,perimeter_se,area_se,smoothness_se,compactness_se,concavity_se,concave_points_se,symmetry_se,fractal_dimension_se,worst_radius,worst_texture,worst_perimeter,worst_area,worst_smoothness,worst_compactness,worst_concavity,worst_concave_points,worst_symmetry,worst_fractal_dimension"
+
+fn repo_data_path(name: String):
+    let cwd = fs.cwd()
+    let direct = fs.join([cwd, "data", name])
+    if fs.exists(direct):
+        return direct
+    let parent = fs.join([fs.dirname(cwd), "data", name])
+    if fs.exists(parent):
+        return parent
+    panic("dataset '{name}' not found in data/")
+
+fn wdbc_table():
+    let raw = fs.read_text(repo_data_path("wdbc.data")).trim()
+    let csv_text = WDBC_HEADER + "\n" + raw
+    return csv.parse(csv_text, {"header": true, "trim": true, "skip_empty": true})
+
+fn iris_table():
+    let raw = fs.read_text(repo_data_path("iris.raw")).trim()
+    let csv_text = "sepal_length,sepal_width,petal_length,petal_width,species\n" + raw.replace(" ", "\n")
+    return csv.parse(csv_text, {"header": true, "trim": true, "skip_empty": true})
