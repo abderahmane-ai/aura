@@ -1,0 +1,70 @@
+import std.io as io
+import std.tensor as tensor
+import std.optim as optim
+import std.data.loader as loader
+import std.ml.preprocess as prep
+import std.nn as nn
+import std.nn.trainer as trainer
+import support.datasets as datasets
+
+fn main():
+    let raw = datasets.adult_table()
+    let split = raw.train_test_split(0.2, true, 1337)
+
+    # Keep runtime reasonable while still training on a realistic mixed-feature dataset.
+    let train_raw = split["train"].head(6000)
+    let test_raw = split["test"].head(2000)
+
+    let target = "income"
+    let numeric = ["age", "fnlwgt", "education_num", "capital_gain", "capital_loss", "hours_per_week"]
+    let categorical = ["workclass", "education", "marital_status", "occupation", "relationship", "race", "sex", "native_country"]
+
+    let num_imputer = prep.imputer(numeric, "mean")
+    let cat_imputer = prep.imputer(categorical, "mode")
+    let scaler = prep.standard_scaler(numeric)
+    let onehot = prep.one_hot_encoder(categorical)
+    let labels = prep.label_encoder(target)
+
+    num_imputer.fit(train_raw)
+    cat_imputer.fit(train_raw)
+
+    let train_filled = cat_imputer.transform(num_imputer.transform(train_raw))
+    let test_filled = cat_imputer.transform(num_imputer.transform(test_raw))
+
+    scaler.fit(train_filled)
+    let train_scaled = scaler.transform(train_filled)
+    let test_scaled = scaler.transform(test_filled)
+
+    onehot.fit(train_scaled)
+    labels.fit(train_scaled)
+
+    let train_encoded = onehot.transform(train_scaled)
+    let test_encoded = onehot.transform(test_scaled)
+    let train_tbl = labels.transform(train_encoded)
+    let test_tbl = labels.transform(test_encoded)
+    let features = train_tbl.feature_cols(target)
+
+    let train = train_tbl.to_tensors(features, target)
+    let test = test_tbl.to_tensors(features, target)
+
+    let batch_size = 256
+    let train_loader = loader.data_loader(loader.tensor_dataset(train["X"], train["y"]), batch_size, true, false, 1337)
+    let test_loader = loader.data_loader(loader.tensor_dataset(test["X"], test["y"]), batch_size, false, false, 1337)
+
+    let device = nil
+    if tensor.cuda_available():
+        device = "cuda:0"
+
+    let model = nn.sequential([nn.linear(len(features), 128, true, "he_uniform"), nn.batch_norm1d(128), nn.relu(), nn.dropout(0.2), nn.linear(128, 64, true, "he_uniform"), nn.batch_norm1d(64), nn.relu(), nn.dropout(0.2), nn.linear(64, 32, true, "he_uniform"), nn.batch_norm1d(32), nn.relu(), nn.dropout(0.1), nn.linear(32, 1, true, "xavier_uniform")])
+
+    let fit = trainer.trainer("classification", optim.adamw(0.001, 0.9, 0.999, 0.00000001, 0.0001), nil, nil, {"epochs": 10, "batch_size": batch_size, "verbose": true, "log_every": 2, "seed": 1337, "device": device, "restore_best": true, "early_stopping_patience": 3})
+
+    io.println("adult income rows train={len(train_tbl.rows)} test={len(test_tbl.rows)} features={len(features)} device={device}")
+    fit.fit(model, train_loader, test_loader)
+    let stats = fit.evaluate(model, test_loader)
+    let loss = stats["loss"]
+    let accuracy = stats["accuracy"]
+    let precision = stats["precision"]
+    let recall = stats["recall"]
+    let f1 = stats["f1"]
+    io.println("adult income loss={loss} accuracy={accuracy} precision={precision} recall={recall} f1={f1}")

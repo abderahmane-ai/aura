@@ -1,0 +1,250 @@
+module std.data.text
+
+import std.tensor as tensor
+import std.data.loader as loader
+
+let DEFAULT_SPECIAL_TOKENS = ["<pad>", "<unk>", "<bos>", "<eos>"]
+
+class Tokenizer:
+    let kind: String
+    let mode: String
+    let lowercase: Bool
+
+    fn init(mode: String = "whitespace", lowercase: Bool = true):
+        if mode != "whitespace" and mode != "char":
+            panic("data.text.Tokenizer mode must be 'whitespace' or 'char'")
+        self.kind = "tokenizer"
+        self.mode = mode
+        self.lowercase = lowercase
+
+    fn tokenize(text: String):
+        let source = text
+        if self.lowercase:
+            source = source.lower()
+        if self.mode == "char":
+            let out = []
+            var i = 0
+            while i < source.len():
+                out.push(source.char_at(i))
+                i += 1
+            return out
+        let normalized = source.replace("\n", " ").replace("\t", " ")
+        let parts = normalized.split(" ")
+        let out = []
+        for part in parts:
+            let token = part.trim()
+            if token != "":
+                out.push(token)
+        return out
+
+fn tokenizer(mode: String = "whitespace", lowercase: Bool = true):
+    return Tokenizer(mode, lowercase)
+
+class Vocab:
+    let kind: String
+    let min_freq: Int
+    let special_tokens
+    var stoi
+    var itos
+
+    fn init(min_freq: Int = 1, special_tokens = nil):
+        if min_freq <= 0:
+            panic("data.text.Vocab expects min_freq > 0")
+        self.kind = "vocab"
+        self.min_freq = min_freq
+        if special_tokens == nil:
+            self.special_tokens = DEFAULT_SPECIAL_TOKENS
+        else:
+            self.special_tokens = to_list(special_tokens)
+        self.stoi = {}
+        self.itos = []
+        self.__reset()
+
+    fn __reset():
+        self.stoi = {}
+        self.itos = []
+        for token in self.special_tokens:
+            self.__add_token(token)
+        return self
+
+    fn __add_token(token: String):
+        if self.stoi[token] != nil:
+            return self.stoi[token]
+        let idx = len(self.itos)
+        self.stoi[token] = idx
+        self.itos.push(token)
+        return idx
+
+    fn fit(items):
+        let counts = {}
+        for item in to_list(items):
+            for token in __tokens_from_item(item):
+                let count = counts[token]
+                if count == nil:
+                    count = 0
+                counts[token] = count + 1
+        self.__reset()
+        let keys = sort(keys(counts))
+        for token in keys:
+            if counts[token] >= self.min_freq:
+                self.__add_token(token)
+        return self
+
+    fn size() -> Int:
+        return len(self.itos)
+
+    fn token_to_id(token: String) -> Int:
+        let idx = self.stoi[token]
+        if idx == nil:
+            return self.stoi["<unk>"]
+        return idx
+
+    fn id_to_token(idx: Int) -> String:
+        if idx < 0 or idx >= len(self.itos):
+            panic("data.text.Vocab id out of range")
+        return self.itos[idx]
+
+    fn encode(tokens, add_bos: Bool = false, add_eos: Bool = false):
+        let out = []
+        if add_bos:
+            out.push(self.token_to_id("<bos>"))
+        for token in to_list(tokens):
+            out.push(self.token_to_id(str(token)))
+        if add_eos:
+            out.push(self.token_to_id("<eos>"))
+        return out
+
+    fn decode(ids, skip_special: Bool = true):
+        let out = []
+        for raw in to_list(ids):
+            let token = self.id_to_token(int(raw))
+            if skip_special and __is_special_token(token, self.special_tokens):
+                continue
+            out.push(token)
+        return out
+
+fn vocab(min_freq: Int = 1, special_tokens = nil):
+    return Vocab(min_freq, special_tokens)
+
+class TextDataset:
+    let kind: String
+    let tokenizer
+    let vocab
+    let max_len
+    let add_bos: Bool
+    let add_eos: Bool
+    var texts
+    var labels
+    var encoded
+
+    fn init(texts, labels = nil, tokenizer = nil, vocab = nil, max_len = nil, add_bos: Bool = false, add_eos: Bool = false):
+        self.kind = "text_dataset"
+        self.texts = to_list(texts)
+        if labels == nil:
+            self.labels = nil
+        else:
+            self.labels = to_list(labels)
+            if len(self.labels) != len(self.texts):
+                panic("data.text.TextDataset expects texts and labels with same length")
+        if tokenizer == nil:
+            self.tokenizer = Tokenizer()
+        else:
+            self.tokenizer = tokenizer
+        if vocab == nil:
+            let built = Vocab()
+            let tokenized = []
+            for text in self.texts:
+                tokenized.push(self.tokenizer.tokenize(str(text)))
+            built.fit(tokenized)
+            self.vocab = built
+        else:
+            self.vocab = vocab
+        self.max_len = max_len
+        self.add_bos = add_bos
+        self.add_eos = add_eos
+        self.encoded = []
+        self.__encode_all()
+
+    fn __encode_all():
+        self.encoded = []
+        for text in self.texts:
+            let tokens = self.tokenizer.tokenize(str(text))
+            let ids = self.vocab.encode(tokens, self.add_bos, self.add_eos)
+            if self.max_len != nil:
+                ids = __truncate_ids(ids, int(self.max_len))
+            self.encoded.push(ids)
+        return self
+
+    fn len() -> Int:
+        return len(self.encoded)
+
+    fn get(index: Int):
+        let item = {"input_ids": self.encoded[index]}
+        if self.labels != nil:
+            item["label"] = self.labels[index]
+        return item
+
+    fn to_tensor_dataset(pad_id = nil):
+        let actual_pad = pad_id
+        if actual_pad == nil:
+            actual_pad = self.vocab.token_to_id("<pad>")
+        let packed = pad_sequences(self.encoded, int(actual_pad), self.max_len)
+        if self.labels == nil:
+            return loader.tensor_dataset(packed["input_ids"])
+        return loader.tensor_dataset(packed["input_ids"], tensor.tensor(self.labels))
+
+fn text_dataset(texts, labels = nil, tokenizer = nil, vocab = nil, max_len = nil, add_bos: Bool = false, add_eos: Bool = false):
+    return TextDataset(texts, labels, tokenizer, vocab, max_len, add_bos, add_eos)
+
+fn pad_sequences(sequences, pad_id: Int = 0, max_len = nil):
+    let rows = []
+    let mask = []
+    let lengths = []
+    let limit = 0
+    for seq in to_list(sequences):
+        let ids = to_list(seq)
+        if len(ids) > limit:
+            limit = len(ids)
+    if max_len != nil:
+        limit = int(max_len)
+    if limit <= 0:
+        panic("data.text.pad_sequences expects non-empty sequences or positive max_len")
+    for seq in to_list(sequences):
+        let ids = __truncate_ids(to_list(seq), limit)
+        lengths.push(len(ids))
+        let row = []
+        let row_mask = []
+        var i = 0
+        while i < limit:
+            if i < len(ids):
+                row.push(float(ids[i]))
+                row_mask.push(1.0)
+            else:
+                row.push(float(pad_id))
+                row_mask.push(0.0)
+            i += 1
+        rows.push(row)
+        mask.push(row_mask)
+    return {"input_ids": tensor.tensor(rows), "mask": tensor.tensor(mask), "lengths": lengths}
+
+fn __truncate_ids(ids, max_len: Int):
+    if max_len <= 0:
+        panic("data.text expected max_len > 0")
+    let out = []
+    var i = 0
+    let limit = min(len(ids), max_len)
+    while i < limit:
+        out.push(ids[i])
+        i += 1
+    return out
+
+fn __tokens_from_item(item):
+    if __type_of(item) == "string":
+        return tokenizer().tokenize(item)
+    return to_list(item)
+
+fn __is_special_token(token: String, specials) -> Bool:
+    for special in to_list(specials):
+        if special == token:
+            return true
+    return false

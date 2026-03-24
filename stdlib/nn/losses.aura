@@ -70,7 +70,7 @@ fn __binary_count(target):
     return max(1, t.len())
 
 fn __regression_target(pred_tensor, target):
-    let t = tensor.tensor(target)
+    let t = tensor.tensor(target, pred_tensor.device())
     if __same_shape(t.shape(), pred_tensor.shape()):
         return t
     if pred_tensor.rank() == 2 and pred_tensor.shape()[1] == 1 and t.rank() == 1 and t.shape()[0] == pred_tensor.shape()[0]:

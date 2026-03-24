@@ -1,0 +1,33 @@
+import std.io as io
+import std.tensor as tensor
+import std.optim as optim
+import std.data.loader as loader
+import std.ml.preprocess as prep
+import std.nn as nn
+import std.nn.trainer as trainer
+import support.datasets as datasets
+
+fn main():
+    if not tensor.cuda_available():
+        io.println("cuda backend unavailable; wdbc cuda example skipped")
+        return
+    let raw = datasets.wdbc_table().drop_cols(["id"])
+    let split = raw.train_test_split(0.2, true, 21)
+    let features = raw.feature_cols("diagnosis")
+    let scaler = prep.standard_scaler(features)
+    let encoder = prep.label_encoder("diagnosis")
+    scaler.fit(split["train"])
+    encoder.fit(split["train"])
+    let train_tbl = encoder.transform(scaler.transform(split["train"]))
+    let test_tbl = encoder.transform(scaler.transform(split["test"]))
+    let train = train_tbl.to_tensors(features, "diagnosis")
+    let test = test_tbl.to_tensors(features, "diagnosis")
+    let train_loader = loader.data_loader(loader.tensor_dataset(train["X"], train["y"]), 64, true, false, 21)
+    let test_loader = loader.data_loader(loader.tensor_dataset(test["X"], test["y"]), 64, false, false, 21)
+    let model = nn.sequential([nn.linear(len(features), 16), nn.relu(), nn.linear(16, 8), nn.relu(), nn.linear(8, 1)])
+    let fit = trainer.trainer("classification", optim.adam(0.01), nil, nil, {"epochs": 200, "verbose": false, "seed": 21, "device": "cuda:0"})
+    fit.fit(model, train_loader)
+    let stats = fit.evaluate(model, test_loader)
+    let accuracy = stats["accuracy"]
+    let loss = stats["loss"]
+    io.println("wdbc cuda accuracy={accuracy} loss={loss}")

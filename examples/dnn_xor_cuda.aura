@@ -1,0 +1,22 @@
+import std.io as io
+import std.tensor as tensor
+import std.optim as optim
+import std.nn as nn
+import std.nn.trainer as trainer
+import std.data.loader as loader
+
+fn main():
+    if not tensor.cuda_available():
+        io.println("cuda backend unavailable; xor cuda example skipped")
+        return
+    let X = tensor.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
+    let y = tensor.tensor([0.0, 1.0, 1.0, 0.0])
+    let dataset = loader.tensor_dataset(X, y)
+    let train_loader = loader.data_loader(dataset, 4, true, false, 7)
+    let model = nn.sequential([nn.linear(2, 8), nn.tanh(), nn.linear(8, 1)])
+    let fit = trainer.trainer("classification", optim.adam(0.05), nil, nil, {"epochs": 500, "verbose": false, "seed": 7, "device": "cuda:0"})
+    fit.fit(model, train_loader)
+    let stats = fit.evaluate(model, train_loader)
+    let accuracy = stats["accuracy"]
+    let loss = stats["loss"]
+    io.println("xor cuda accuracy={accuracy} loss={loss}")

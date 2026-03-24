@@ -1,0 +1,15 @@
+import std.io as io
+import std.tensor as tensor
+
+fn main():
+    let x = tensor.tensor([[1.0, 2.0], [3.0, 4.0]])
+    io.println("cpu tensor device={x.device()} cuda_available={tensor.cuda_available()}")
+    if not tensor.cuda_available():
+        io.println("cuda backend unavailable; parity demo skipped")
+        return
+    let expected = x.matmul(x.transpose())
+    let y = x.cuda("cuda:0")
+    let z = y.matmul(y.transpose()).cpu()
+    if z.to_list()[0][0] != expected.to_list()[0][0] or z.to_list()[1][1] != expected.to_list()[1][1]:
+        panic("gpu parity mismatch")
+    io.println("gpu parity result={z.to_list()}")

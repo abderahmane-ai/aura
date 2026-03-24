@@ -28,6 +28,7 @@ fn he_normal_(value, fan_in: Int):
 
 fn __assign_init(value, src):
     let target = __tensor_ref(value)
+    src = tensor.tensor(src).to(target.device())
     target.mul_(0.0)
     target.add_(src)
     __clear_grad(value)

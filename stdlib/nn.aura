@@ -37,6 +37,15 @@ class Module:
     fn zero_grad():
         return zero_grad(self)
 
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
     fn state_dict():
         return state_dict(self)
 
@@ -67,6 +76,24 @@ class Parameter:
         if self.grad != nil:
             self.grad.fill_(0.0)
         return self
+
+    fn to(device: String):
+        self.data = self.data.to(device)
+        if self.grad != nil:
+            self.grad = self.grad.to(device)
+        return self
+
+    fn cpu():
+        return self.to("cpu")
+
+    fn cuda(device: String = "cuda:0"):
+        return self.to(device)
+
+    fn device() -> String:
+        return self.data.device()
+
+    fn is_cuda() -> Bool:
+        return self.data.is_cuda()
 
 fn parameter(data, name: String = ""):
     return Parameter(data, name)
@@ -118,6 +145,15 @@ class Linear:
     fn zero_grad():
         return zero_grad(self)
 
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
     fn state_dict():
         return state_dict(self)
 
@@ -160,6 +196,15 @@ class ReLU:
 
     fn zero_grad():
         return self
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
 
     fn state_dict():
         return {}
@@ -204,6 +249,15 @@ class Sigmoid:
     fn zero_grad():
         return self
 
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
     fn state_dict():
         return {}
 
@@ -247,6 +301,15 @@ class Tanh:
     fn zero_grad():
         return self
 
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
     fn state_dict():
         return {}
 
@@ -289,6 +352,15 @@ class Identity:
 
     fn zero_grad():
         return self
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
 
     fn state_dict():
         return {}
@@ -336,6 +408,15 @@ class Dropout:
 
     fn zero_grad():
         return self
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
 
     fn state_dict():
         return {}
@@ -393,6 +474,15 @@ class LayerNorm:
 
     fn zero_grad():
         return zero_grad(self)
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
 
     fn state_dict():
         return state_dict(self)
@@ -459,6 +549,15 @@ class BatchNorm1d:
     fn zero_grad():
         return zero_grad(self)
 
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
     fn state_dict():
         return state_dict(self)
 
@@ -470,6 +569,765 @@ class BatchNorm1d:
 
 fn batch_norm1d(features: Int, eps: Float64 = 0.00001, momentum: Float64 = 0.1, affine: Bool = true, track_running_stats: Bool = true):
     return BatchNorm1d(features, eps, momentum, affine, track_running_stats)
+
+class Flatten:
+    let kind: String
+    var training: Bool
+    let start_dim: Int
+    let end_dim: Int
+
+    fn init(start_dim: Int = 1, end_dim: Int = -1):
+        self.kind = "flatten"
+        self.training = true
+        self.start_dim = start_dim
+        self.end_dim = end_dim
+
+    fn forward(x):
+        let input = __as_variable(x)
+        let shape = input.data.shape()
+        let rank = len(shape)
+        var start = self.start_dim
+        var stop = self.end_dim
+        if start < 0:
+            start += rank
+        if stop < 0:
+            stop += rank
+        if start < 0 or stop < start or stop >= rank:
+            panic("nn.Flatten invalid dims")
+        let out_shape = []
+        var i = 0
+        while i < start:
+            out_shape.push(shape[i])
+            i += 1
+        let merged = 1
+        i = start
+        while i <= stop:
+            merged *= shape[i]
+            i += 1
+        out_shape.push(merged)
+        while i < rank:
+            out_shape.push(shape[i])
+            i += 1
+        return input.reshape(out_shape)
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn to(device: String):
+        return self
+
+    fn cpu():
+        return self
+
+    fn cuda(device: String = "cuda:0"):
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn flatten(start_dim: Int = 1, end_dim: Int = -1):
+    return Flatten(start_dim, end_dim)
+
+class Conv2d:
+    let kind: String
+    var training: Bool
+    let in_channels: Int
+    let out_channels: Int
+    let kernel_size
+    let stride
+    let padding
+    let dilation
+    let bias_enabled: Bool
+    var weight
+    var bias
+
+    fn init(in_channels: Int, out_channels: Int, kernel_size, stride = 1, padding = 0, dilation = 1, bias: Bool = true):
+        if in_channels <= 0 or out_channels <= 0:
+            panic("nn.Conv2d expects in_channels > 0 and out_channels > 0")
+        self.kind = "conv2d"
+        self.training = true
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = __pair(kernel_size)
+        self.stride = __pair(stride)
+        self.padding = __pair(padding)
+        self.dilation = __pair(dilation)
+        self.bias_enabled = bias
+        self.weight = Parameter(tensor.zeros([out_channels, in_channels, self.kernel_size[0], self.kernel_size[1]]), "weight")
+        if bias:
+            self.bias = Parameter(tensor.zeros([out_channels]), "bias")
+        else:
+            self.bias = nil
+        __apply_conv_init(self)
+
+    fn forward(x):
+        return functional.conv2d(__as_variable(x), self.weight, self.bias, self.stride, self.padding, self.dilation)
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn conv2d(in_channels: Int, out_channels: Int, kernel_size, stride = 1, padding = 0, dilation = 1, bias: Bool = true):
+    return Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias)
+
+class AvgPool2d:
+    let kind: String
+    var training: Bool
+    let kernel_size
+    let stride
+    let padding
+
+    fn init(kernel_size, stride = nil, padding = 0):
+        self.kind = "avg_pool2d"
+        self.training = true
+        self.kernel_size = __pair(kernel_size)
+        if stride == nil:
+            self.stride = nil
+        else:
+            self.stride = __pair(stride)
+        self.padding = __pair(padding)
+
+    fn forward(x):
+        return functional.avg_pool2d(__as_variable(x), self.kernel_size, self.stride, self.padding)
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn to(device: String):
+        return self
+
+    fn cpu():
+        return self
+
+    fn cuda(device: String = "cuda:0"):
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn avg_pool2d(kernel_size, stride = nil, padding = 0):
+    return AvgPool2d(kernel_size, stride, padding)
+
+class MaxPool2d:
+    let kind: String
+    var training: Bool
+    let kernel_size
+    let stride
+    let padding
+
+    fn init(kernel_size, stride = nil, padding = 0):
+        self.kind = "max_pool2d"
+        self.training = true
+        self.kernel_size = __pair(kernel_size)
+        if stride == nil:
+            self.stride = nil
+        else:
+            self.stride = __pair(stride)
+        self.padding = __pair(padding)
+
+    fn forward(x):
+        return functional.max_pool2d(__as_variable(x), self.kernel_size, self.stride, self.padding)
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn to(device: String):
+        return self
+
+    fn cpu():
+        return self
+
+    fn cuda(device: String = "cuda:0"):
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn max_pool2d(kernel_size, stride = nil, padding = 0):
+    return MaxPool2d(kernel_size, stride, padding)
+
+class AdaptiveAvgPool2d:
+    let kind: String
+    var training: Bool
+    let output_size
+
+    fn init(output_size):
+        self.kind = "adaptive_avg_pool2d"
+        self.training = true
+        self.output_size = __pair(output_size)
+
+    fn forward(x):
+        return functional.adaptive_avg_pool2d(__as_variable(x), self.output_size)
+
+    fn parameters():
+        return []
+
+    fn named_parameters():
+        return []
+
+    fn buffers():
+        return []
+
+    fn train():
+        self.training = true
+        return self
+
+    fn eval():
+        self.training = false
+        return self
+
+    fn zero_grad():
+        return self
+
+    fn to(device: String):
+        return self
+
+    fn cpu():
+        return self
+
+    fn cuda(device: String = "cuda:0"):
+        return self
+
+    fn state_dict():
+        return {}
+
+    fn load_state_dict(state):
+        return self
+
+    fn save(path: String):
+        return save(self, path)
+
+fn adaptive_avg_pool2d(output_size):
+    return AdaptiveAvgPool2d(output_size)
+
+class Embedding:
+    let kind: String
+    var training: Bool
+    let num_embeddings: Int
+    let embedding_dim: Int
+    var weight
+
+    fn init(num_embeddings: Int, embedding_dim: Int):
+        if num_embeddings <= 0 or embedding_dim <= 0:
+            panic("nn.Embedding expects num_embeddings > 0 and embedding_dim > 0")
+        self.kind = "embedding"
+        self.training = true
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.weight = Parameter(tensor.zeros([num_embeddings, embedding_dim]), "weight")
+        init.xavier_uniform_(self.weight, num_embeddings, embedding_dim)
+
+    fn forward(x):
+        return functional.embedding(x, self.weight)
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn embedding(num_embeddings: Int, embedding_dim: Int):
+    return Embedding(num_embeddings, embedding_dim)
+
+class RNN:
+    let kind: String
+    var training: Bool
+    let input_size: Int
+    let hidden_size: Int
+    var weight_ih
+    var weight_hh
+    var bias_ih
+    var bias_hh
+
+    fn init(input_size: Int, hidden_size: Int, bias: Bool = true):
+        if input_size <= 0 or hidden_size <= 0:
+            panic("nn.RNN expects input_size > 0 and hidden_size > 0")
+        self.kind = "rnn"
+        self.training = true
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.weight_ih = Parameter(tensor.zeros([input_size, hidden_size]), "weight_ih")
+        self.weight_hh = Parameter(tensor.zeros([hidden_size, hidden_size]), "weight_hh")
+        if bias:
+            self.bias_ih = Parameter(tensor.zeros([hidden_size]), "bias_ih")
+            self.bias_hh = Parameter(tensor.zeros([hidden_size]), "bias_hh")
+        else:
+            self.bias_ih = nil
+            self.bias_hh = nil
+        __apply_recurrent_init(self.weight_ih, input_size, hidden_size)
+        __apply_recurrent_init(self.weight_hh, hidden_size, hidden_size)
+        if self.bias_ih != nil:
+            init.zeros_(self.bias_ih)
+            init.zeros_(self.bias_hh)
+
+    fn step(x_t, h_t):
+        let out = x_t.matmul(self.weight_ih).add(h_t.matmul(self.weight_hh))
+        if self.bias_ih != nil:
+            return out.add(self.bias_ih).add(self.bias_hh).tanh()
+        return out.tanh()
+
+    fn run_sequence(x, h0 = nil):
+        let input = __as_variable(x)
+        __ensure_sequence_shape(input.data, self.input_size, "nn.RNN")
+        let batch = input.data.shape()[0]
+        let steps = input.data.shape()[1]
+        var h_t = h0
+        if h_t == nil:
+            h_t = autograd.variable(tensor.zeros([batch, self.hidden_size], input.data.device()), false)
+        else:
+            h_t = __as_variable(h0)
+        let outputs = []
+        var t = 0
+        while t < steps:
+            let x_t = functional.select_timestep(input, t)
+            h_t = self.step(x_t, h_t)
+            outputs.push(h_t)
+            t += 1
+        return {"steps": outputs, "hidden": h_t}
+
+    fn forward(x):
+        return self.run_sequence(x)["hidden"]
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn rnn(input_size: Int, hidden_size: Int, bias: Bool = true):
+    return RNN(input_size, hidden_size, bias)
+
+class GRU:
+    let kind: String
+    var training: Bool
+    let input_size: Int
+    let hidden_size: Int
+    var weight_ir
+    var weight_iz
+    var weight_in
+    var weight_hr
+    var weight_hz
+    var weight_hn
+    var bias_ir
+    var bias_iz
+    var bias_in
+    var bias_hr
+    var bias_hz
+    var bias_hn
+
+    fn init(input_size: Int, hidden_size: Int, bias: Bool = true):
+        if input_size <= 0 or hidden_size <= 0:
+            panic("nn.GRU expects input_size > 0 and hidden_size > 0")
+        self.kind = "gru"
+        self.training = true
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.weight_ir = Parameter(tensor.zeros([input_size, hidden_size]), "weight_ir")
+        self.weight_iz = Parameter(tensor.zeros([input_size, hidden_size]), "weight_iz")
+        self.weight_in = Parameter(tensor.zeros([input_size, hidden_size]), "weight_in")
+        self.weight_hr = Parameter(tensor.zeros([hidden_size, hidden_size]), "weight_hr")
+        self.weight_hz = Parameter(tensor.zeros([hidden_size, hidden_size]), "weight_hz")
+        self.weight_hn = Parameter(tensor.zeros([hidden_size, hidden_size]), "weight_hn")
+        if bias:
+            self.bias_ir = Parameter(tensor.zeros([hidden_size]), "bias_ir")
+            self.bias_iz = Parameter(tensor.zeros([hidden_size]), "bias_iz")
+            self.bias_in = Parameter(tensor.zeros([hidden_size]), "bias_in")
+            self.bias_hr = Parameter(tensor.zeros([hidden_size]), "bias_hr")
+            self.bias_hz = Parameter(tensor.zeros([hidden_size]), "bias_hz")
+            self.bias_hn = Parameter(tensor.zeros([hidden_size]), "bias_hn")
+            init.zeros_(self.bias_ir)
+            init.zeros_(self.bias_iz)
+            init.zeros_(self.bias_in)
+            init.zeros_(self.bias_hr)
+            init.zeros_(self.bias_hz)
+            init.zeros_(self.bias_hn)
+        else:
+            self.bias_ir = nil
+            self.bias_iz = nil
+            self.bias_in = nil
+            self.bias_hr = nil
+            self.bias_hz = nil
+            self.bias_hn = nil
+        __apply_recurrent_init(self.weight_ir, input_size, hidden_size)
+        __apply_recurrent_init(self.weight_iz, input_size, hidden_size)
+        __apply_recurrent_init(self.weight_in, input_size, hidden_size)
+        __apply_recurrent_init(self.weight_hr, hidden_size, hidden_size)
+        __apply_recurrent_init(self.weight_hz, hidden_size, hidden_size)
+        __apply_recurrent_init(self.weight_hn, hidden_size, hidden_size)
+
+    fn step(x_t, h_t):
+        let r = __gru_gate(x_t, self.weight_ir, self.bias_ir, h_t, self.weight_hr, self.bias_hr)
+        let z = __gru_gate(x_t, self.weight_iz, self.bias_iz, h_t, self.weight_hz, self.bias_hz)
+        let n = x_t.matmul(self.weight_in).add(h_t.mul(r).matmul(self.weight_hn))
+        if self.bias_in != nil:
+            n = n.add(self.bias_in).add(self.bias_hn)
+        n = n.tanh()
+        let one = __ones_like(z)
+        return one.sub(z).mul(n).add(z.mul(h_t))
+
+    fn run_sequence(x, h0 = nil):
+        let input = __as_variable(x)
+        __ensure_sequence_shape(input.data, self.input_size, "nn.GRU")
+        let batch = input.data.shape()[0]
+        let steps = input.data.shape()[1]
+        var h_t = h0
+        if h_t == nil:
+            h_t = autograd.variable(tensor.zeros([batch, self.hidden_size], input.data.device()), false)
+        else:
+            h_t = __as_variable(h0)
+        let outputs = []
+        var t = 0
+        while t < steps:
+            let x_t = functional.select_timestep(input, t)
+            h_t = self.step(x_t, h_t)
+            outputs.push(h_t)
+            t += 1
+        return {"steps": outputs, "hidden": h_t}
+
+    fn forward(x):
+        return self.run_sequence(x)["hidden"]
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn gru(input_size: Int, hidden_size: Int, bias: Bool = true):
+    return GRU(input_size, hidden_size, bias)
+
+class LSTM:
+    let kind: String
+    var training: Bool
+    let input_size: Int
+    let hidden_size: Int
+    var weight_ii
+    var weight_if
+    var weight_ig
+    var weight_io
+    var weight_hi
+    var weight_hf
+    var weight_hg
+    var weight_ho
+    var bias_ii
+    var bias_if
+    var bias_ig
+    var bias_io
+    var bias_hi
+    var bias_hf
+    var bias_hg
+    var bias_ho
+
+    fn init(input_size: Int, hidden_size: Int, bias: Bool = true):
+        if input_size <= 0 or hidden_size <= 0:
+            panic("nn.LSTM expects input_size > 0 and hidden_size > 0")
+        self.kind = "lstm"
+        self.training = true
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.weight_ii = Parameter(tensor.zeros([input_size, hidden_size]), "weight_ii")
+        self.weight_if = Parameter(tensor.zeros([input_size, hidden_size]), "weight_if")
+        self.weight_ig = Parameter(tensor.zeros([input_size, hidden_size]), "weight_ig")
+        self.weight_io = Parameter(tensor.zeros([input_size, hidden_size]), "weight_io")
+        self.weight_hi = Parameter(tensor.zeros([hidden_size, hidden_size]), "weight_hi")
+        self.weight_hf = Parameter(tensor.zeros([hidden_size, hidden_size]), "weight_hf")
+        self.weight_hg = Parameter(tensor.zeros([hidden_size, hidden_size]), "weight_hg")
+        self.weight_ho = Parameter(tensor.zeros([hidden_size, hidden_size]), "weight_ho")
+        if bias:
+            self.bias_ii = Parameter(tensor.zeros([hidden_size]), "bias_ii")
+            self.bias_if = Parameter(tensor.zeros([hidden_size]), "bias_if")
+            self.bias_ig = Parameter(tensor.zeros([hidden_size]), "bias_ig")
+            self.bias_io = Parameter(tensor.zeros([hidden_size]), "bias_io")
+            self.bias_hi = Parameter(tensor.zeros([hidden_size]), "bias_hi")
+            self.bias_hf = Parameter(tensor.zeros([hidden_size]), "bias_hf")
+            self.bias_hg = Parameter(tensor.zeros([hidden_size]), "bias_hg")
+            self.bias_ho = Parameter(tensor.zeros([hidden_size]), "bias_ho")
+            __zero_many([self.bias_ii, self.bias_if, self.bias_ig, self.bias_io, self.bias_hi, self.bias_hf, self.bias_hg, self.bias_ho])
+        else:
+            self.bias_ii = nil
+            self.bias_if = nil
+            self.bias_ig = nil
+            self.bias_io = nil
+            self.bias_hi = nil
+            self.bias_hf = nil
+            self.bias_hg = nil
+            self.bias_ho = nil
+        __apply_recurrent_init(self.weight_ii, input_size, hidden_size)
+        __apply_recurrent_init(self.weight_if, input_size, hidden_size)
+        __apply_recurrent_init(self.weight_ig, input_size, hidden_size)
+        __apply_recurrent_init(self.weight_io, input_size, hidden_size)
+        __apply_recurrent_init(self.weight_hi, hidden_size, hidden_size)
+        __apply_recurrent_init(self.weight_hf, hidden_size, hidden_size)
+        __apply_recurrent_init(self.weight_hg, hidden_size, hidden_size)
+        __apply_recurrent_init(self.weight_ho, hidden_size, hidden_size)
+
+    fn step(x_t, h_t, c_t):
+        let i = __lstm_gate(x_t, self.weight_ii, self.bias_ii, h_t, self.weight_hi, self.bias_hi)
+        let f = __lstm_gate(x_t, self.weight_if, self.bias_if, h_t, self.weight_hf, self.bias_hf)
+        let g = __lstm_candidate(x_t, self.weight_ig, self.bias_ig, h_t, self.weight_hg, self.bias_hg)
+        let o = __lstm_gate(x_t, self.weight_io, self.bias_io, h_t, self.weight_ho, self.bias_ho)
+        let next_c = f.mul(c_t).add(i.mul(g))
+        let next_h = o.mul(next_c.tanh())
+        return {"hidden": next_h, "cell": next_c}
+
+    fn run_sequence(x, h0 = nil, c0 = nil):
+        let input = __as_variable(x)
+        __ensure_sequence_shape(input.data, self.input_size, "nn.LSTM")
+        let batch = input.data.shape()[0]
+        let steps = input.data.shape()[1]
+        var h_t = h0
+        var c_t = c0
+        if h_t == nil:
+            h_t = autograd.variable(tensor.zeros([batch, self.hidden_size], input.data.device()), false)
+        else:
+            h_t = __as_variable(h0)
+        if c_t == nil:
+            c_t = autograd.variable(tensor.zeros([batch, self.hidden_size], input.data.device()), false)
+        else:
+            c_t = __as_variable(c0)
+        let outputs = []
+        var t = 0
+        while t < steps:
+            let x_t = functional.select_timestep(input, t)
+            let state = self.step(x_t, h_t, c_t)
+            h_t = state["hidden"]
+            c_t = state["cell"]
+            outputs.push(h_t)
+            t += 1
+        return {"steps": outputs, "hidden": h_t, "cell": c_t}
+
+    fn forward(x):
+        return self.run_sequence(x)["hidden"]
+
+    fn parameters():
+        return parameters(self)
+
+    fn named_parameters():
+        return named_parameters(self)
+
+    fn buffers():
+        return buffers(self)
+
+    fn train():
+        return train(self)
+
+    fn eval():
+        return eval(self)
+
+    fn zero_grad():
+        return zero_grad(self)
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
+
+    fn state_dict():
+        return state_dict(self)
+
+    fn load_state_dict(state):
+        return load_state_dict(self, state)
+
+    fn save(path: String):
+        return save(self, path)
+
+fn lstm(input_size: Int, hidden_size: Int, bias: Bool = true):
+    return LSTM(input_size, hidden_size, bias)
 
 class Sequential:
     let kind: String
@@ -504,6 +1362,15 @@ class Sequential:
 
     fn zero_grad():
         return zero_grad(self)
+
+    fn to(device: String):
+        return to(self, device)
+
+    fn cpu():
+        return cpu(self)
+
+    fn cuda(device: String = "cuda:0"):
+        return cuda(self, device)
 
     fn state_dict():
         return state_dict(self)
@@ -590,6 +1457,16 @@ fn eval(mod):
     __set_training(mod, false)
     return mod
 
+fn to(mod, device: String):
+    __move_module_tensors(mod, device)
+    return mod
+
+fn cpu(mod):
+    return to(mod, "cpu")
+
+fn cuda(mod, device: String = "cuda:0"):
+    return to(mod, device)
+
 fn zero_grad(mod):
     for param in parameters(mod):
         param.zero_grad()
@@ -670,6 +1547,32 @@ fn __set_training(mod, flag: Bool):
         return
     if kind == "residual":
         __set_training(mod.block, flag)
+
+fn __move_module_tensors(mod, device: String):
+    let kind = mod.kind
+    if kind == "linear":
+        mod.weight.to(device)
+        if mod.bias != nil:
+            mod.bias.to(device)
+        return
+    if kind == "layer_norm":
+        if mod.gamma != nil:
+            mod.gamma.to(device)
+            mod.beta.to(device)
+        return
+    if kind == "batch_norm1d":
+        if mod.gamma != nil:
+            mod.gamma.to(device)
+            mod.beta.to(device)
+        mod.running_mean = mod.running_mean.to(device)
+        mod.running_var = mod.running_var.to(device)
+        return
+    if kind == "sequential":
+        for child in mod.modules:
+            __move_module_tensors(child, device)
+        return
+    if kind == "residual":
+        __move_module_tensors(mod.block, device)
 
 fn __collect_state(prefix: String, mod, out):
     for pair in named_parameters(mod):

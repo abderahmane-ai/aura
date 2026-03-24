@@ -1,39 +1,54 @@
 module std.tensor
 
-fn tensor(value):
-    return Tensor(value)
+fn tensor(value, device = nil):
+    return Tensor(value, device)
 
-fn from_shape(shape, fill: Float64 = 0.0):
-    return TensorShape(shape, fill)
+fn from_shape(shape, fill: Float64 = 0.0, device = nil):
+    return TensorShape(shape, fill, device)
 
-fn full(shape, value: Float64):
-    return TensorShape(shape, value)
+fn full(shape, value: Float64, device = nil):
+    return TensorShape(shape, value, device)
 
-fn zeros(shape):
-    return TensorShape(shape, 0.0)
+fn zeros(shape, device = nil):
+    return TensorShape(shape, 0.0, device)
 
-fn ones(shape):
-    return TensorShape(shape, 1.0)
+fn ones(shape, device = nil):
+    return TensorShape(shape, 1.0, device)
 
-fn rand(shape, min: Float64 = 0.0, max: Float64 = 1.0):
-    return TensorRand(shape, min, max)
+fn rand(shape, min: Float64 = 0.0, max: Float64 = 1.0, device = nil):
+    return TensorRand(shape, min, max, device)
 
-fn randn(shape, mean: Float64 = 0.0, std: Float64 = 1.0):
-    return TensorRandn(shape, mean, std)
+fn randn(shape, mean: Float64 = 0.0, std: Float64 = 1.0, device = nil):
+    return TensorRandn(shape, mean, std, device)
 
-fn eye(n: Int, m: Int = -1):
+fn eye(n: Int, m: Int = -1, device = nil):
     if m < 0:
-        return TensorEye(n)
-    return TensorEye(n, m)
+        return TensorEye(n, nil, device)
+    return TensorEye(n, m, device)
 
 fn zeros_like(t):
-    return TensorShape(t.shape(), 0.0)
+    return TensorShape(t.shape(), 0.0, t.device())
 
 fn ones_like(t):
-    return TensorShape(t.shape(), 1.0)
+    return TensorShape(t.shape(), 1.0, t.device())
 
 fn full_like(t, value: Float64):
-    return TensorShape(t.shape(), value)
+    return TensorShape(t.shape(), value, t.device())
+
+fn cuda_available() -> Bool:
+    return __tensor_cuda_available()
+
+fn device_count() -> Int:
+    return __tensor_device_count()
+
+fn default_device() -> String:
+    return __tensor_default_device()
+
+fn set_default_device(device: String):
+    return __tensor_set_default_device(device)
+
+fn synchronize():
+    return __tensor_synchronize()
 
 fn shape(t):
     return t.shape()
@@ -219,6 +234,20 @@ fn softmax(t, axis: Int = -1):
 fn log_softmax(t, axis: Int = -1):
     return t.log_softmax(axis)
 
+fn logsumexp(t, axis: Int = -1, keepdim: Bool = false):
+    let x = tensor(t)
+    let rank = x.rank()
+    var actual_axis = axis
+    if actual_axis < 0:
+        actual_axis += rank
+    if actual_axis < 0 or actual_axis >= rank:
+        panic("tensor.logsumexp axis out of range")
+    let max_keep = x.max_axis(actual_axis, true)
+    let out_keep = x.sub(max_keep).exp().sum_axis(actual_axis, true).log().add(max_keep)
+    if keepdim:
+        return out_keep
+    return out_keep.squeeze(actual_axis)
+
 fn dot(a, b):
     return a.dot(b)
 
@@ -365,7 +394,8 @@ fn one_hot(indices, num_classes: Int):
                 row.push(0.0)
             c += 1
         rows.push(row)
-    return Tensor(rows)
+    let device = tensor(indices).device()
+    return Tensor(rows, device)
 
 fn __same_shape(a, b):
     if len(a) != len(b):

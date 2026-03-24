@@ -1,0 +1,53 @@
+import std.test as test
+import std.tensor as tensor
+
+fn main():
+    let prev = tensor.default_device()
+    tensor.set_default_device("cpu")
+
+    let x = tensor.tensor([[1.0, 2.0], [3.0, 4.0]], "cpu")
+    test.assert_equal(x.device(), "cpu")
+    test.assert_equal(x.is_cuda(), false)
+    test.assert_equal(x.cpu().device(), "cpu")
+
+    test.assert_true(tensor.device_count() >= 0)
+    if tensor.cuda_available():
+        let y = x.cuda("cuda:0")
+        test.assert_equal(y.is_cuda(), true)
+        let roundtrip = y.cpu().to_list()
+        let expected = x.to_list()
+        test.assert_equal(roundtrip[0][0], expected[0][0])
+        test.assert_equal(roundtrip[1][1], expected[1][1])
+
+        let cpu_mm = x.matmul(x.transpose()).to_list()
+        let gpu_mm = y.matmul(y.transpose()).cpu().to_list()
+        test.assert_approx(gpu_mm[0][0], cpu_mm[0][0], 0.000001)
+        test.assert_approx(gpu_mm[0][1], cpu_mm[0][1], 0.000001)
+        test.assert_approx(gpu_mm[1][0], cpu_mm[1][0], 0.000001)
+        test.assert_approx(gpu_mm[1][1], cpu_mm[1][1], 0.000001)
+
+        let bias_cpu = x.add(tensor.tensor([10.0, 20.0])).to_list()
+        let bias_gpu = y.add(tensor.tensor([10.0, 20.0]).cuda("cuda:0")).cpu().to_list()
+        test.assert_approx(bias_gpu[0][0], bias_cpu[0][0], 0.000001)
+        test.assert_approx(bias_gpu[1][1], bias_cpu[1][1], 0.000001)
+
+        let sum_cpu = x.sum_axis(0).to_list()
+        let sum_gpu = y.sum_axis(0).cpu().to_list()
+        test.assert_approx(sum_gpu[0], sum_cpu[0], 0.000001)
+        test.assert_approx(sum_gpu[1], sum_cpu[1], 0.000001)
+
+        let sig_cpu = tensor.tensor([0.0, 1.0, -1.0]).sigmoid().to_list()
+        let sig_gpu = tensor.tensor([0.0, 1.0, -1.0]).cuda("cuda:0").sigmoid().cpu().to_list()
+        test.assert_approx(sig_gpu[0], sig_cpu[0], 0.000001)
+        test.assert_approx(sig_gpu[1], sig_cpu[1], 0.000001)
+        test.assert_approx(sig_gpu[2], sig_cpu[2], 0.000001)
+
+        let soft_cpu = tensor.tensor([1.0, 2.0, 3.0]).softmax().to_list()
+        let soft_gpu = tensor.tensor([1.0, 2.0, 3.0]).cuda("cuda:0").softmax().cpu().to_list()
+        test.assert_approx(soft_gpu[0], soft_cpu[0], 0.000001)
+        test.assert_approx(soft_gpu[1], soft_cpu[1], 0.000001)
+        test.assert_approx(soft_gpu[2], soft_cpu[2], 0.000001)
+    else:
+        test.assert_equal(tensor.device_count(), 0)
+
+    tensor.set_default_device(prev)

@@ -836,8 +836,19 @@ fn main():
     t.shape()   # [2, 2]
     t.rank()    # 2
     t.len()     # 4
+    t.device()  # "cpu" by default
     t.to_list() # [[1,2],[3,4]]
     t.to_flat_list()  # [1,2,3,4]
+
+    # Device management
+    tensor.cuda_available()
+    tensor.device_count()
+    tensor.default_device()
+    tensor.set_default_device("cpu")
+    t.to("cpu")
+    t.cpu()
+    if tensor.cuda_available():
+        t.cuda("cuda:0")
 
     # Operations
     t.transpose()    # [[1,3],[2,4]]

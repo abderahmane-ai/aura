@@ -9,9 +9,10 @@
     },
     "scripts": {
         "build": "tsc -p tsconfig.json",
+        "build:cuda": "node-gyp rebuild --directory native",
         "check:conformance": "powershell -ExecutionPolicy Bypass -File ../scripts/run-conformance.ps1 -SkipBuild",
         "check:all": "npm run build && powershell -NoProfile -Command \"$failed = $false; Get-ChildItem -Path ../examples -Filter *.aura | ForEach-Object { node dist/main.js check $_.FullName; if ($LASTEXITCODE -ne 0) { $failed = $true } }; if ($failed) { exit 1 }\"",
-        "test:examples": "npm run build && powershell -NoProfile -Command \"$failed = $false; @('../examples/data_types.aura','../examples/functions.aura','../examples/interfaces.aura','../examples/imports_map_filter.aura','../examples/math_library.aura','../examples/logistic_iris_csv.aura','../examples/logistic_wdbc_csv.aura','../examples/logistic_heart_csv.aura','../examples/dnn_xor.aura','../examples/dnn_blobs.aura','../examples/dnn_regression.aura','../examples/dnn_wdbc_table.aura') | ForEach-Object { node dist/main.js run $_; if ($LASTEXITCODE -ne 0) { $failed = $true } }; if ($failed) { exit 1 }\"",
+        "test:examples": "npm run build && powershell -NoProfile -Command \"$failed = $false; @('../examples/data_types.aura','../examples/functions.aura','../examples/interfaces.aura','../examples/imports_map_filter.aura','../examples/math_library.aura','../examples/logistic_iris_csv.aura','../examples/logistic_wdbc_csv.aura','../examples/logistic_heart_csv.aura','../examples/dnn_xor.aura','../examples/dnn_blobs.aura','../examples/dnn_regression.aura','../examples/dnn_wdbc_table.aura','../examples/dnn_gpu_parity.aura','../examples/dnn_xor_cuda.aura','../examples/dnn_wdbc_cuda.aura') | ForEach-Object { node dist/main.js run $_; if ($LASTEXITCODE -ne 0) { $failed = $true } }; if ($failed) { exit 1 }\"",
         "check:strict": "npm run check:all && npm run test:examples && npm run check:conformance",
         "test": "npm run build && node dist/main.js test ../tests",
         "run:data_types": "npm run build && node dist/main.js run ../examples/data_types.aura",
@@ -25,6 +26,7 @@
         "run:logistic_heart": "npm run build && node dist/main.js run ../examples/logistic_heart_csv.aura"
     },
     "devDependencies": {
+        "node-gyp": "^11.0.0",
         "tsx": "^4.7.1",
         "typescript": "^5.4.0",
         "@types/node": "^20.0.0"

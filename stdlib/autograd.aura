@@ -94,6 +94,15 @@ class Variable:
     fn tanh():
         return tanh(self)
 
+    fn softmax(axis: Int = -1):
+        return softmax(self, axis)
+
+    fn log_softmax(axis: Int = -1):
+        return log_softmax(self, axis)
+
+    fn logsumexp(axis: Int = -1, keepdim: Bool = false):
+        return logsumexp(self, axis, keepdim)
+
     fn reshape(shape):
         return reshape(self, shape)
 
@@ -132,35 +141,35 @@ fn zero_grad(v):
 
 fn add(a, b):
     let lhs = __ensure_variable(a)
-    let rhs = __ensure_variable(b)
+    let rhs = __ensure_variable_on(b, lhs.data.device())
     let requires_grad = lhs.requires_grad or rhs.requires_grad
     let ctx = {"a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
     return Variable(lhs.data.add(rhs.data), requires_grad, [lhs, rhs], "add", ctx, nil)
 
 fn sub(a, b):
     let lhs = __ensure_variable(a)
-    let rhs = __ensure_variable(b)
+    let rhs = __ensure_variable_on(b, lhs.data.device())
     let requires_grad = lhs.requires_grad or rhs.requires_grad
     let ctx = {"a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
     return Variable(lhs.data.sub(rhs.data), requires_grad, [lhs, rhs], "sub", ctx, nil)
 
 fn mul(a, b):
     let lhs = __ensure_variable(a)
-    let rhs = __ensure_variable(b)
+    let rhs = __ensure_variable_on(b, lhs.data.device())
     let requires_grad = lhs.requires_grad or rhs.requires_grad
     let ctx = {"lhs": lhs.data.clone(), "rhs": rhs.data.clone(), "a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
     return Variable(lhs.data.mul(rhs.data), requires_grad, [lhs, rhs], "mul", ctx, nil)
 
 fn div(a, b):
     let lhs = __ensure_variable(a)
-    let rhs = __ensure_variable(b)
+    let rhs = __ensure_variable_on(b, lhs.data.device())
     let requires_grad = lhs.requires_grad or rhs.requires_grad
     let ctx = {"lhs": lhs.data.clone(), "rhs": rhs.data.clone(), "a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
     return Variable(lhs.data.div(rhs.data), requires_grad, [lhs, rhs], "div", ctx, nil)
 
 fn pow(a, b):
     let lhs = __ensure_variable(a)
-    let rhs = __ensure_variable(b)
+    let rhs = __ensure_variable_on(b, lhs.data.device())
     let requires_grad = lhs.requires_grad or rhs.requires_grad
     let out = lhs.data.pow(rhs.data)
     let ctx = {"lhs": lhs.data.clone(), "rhs": rhs.data.clone(), "out": out.clone(), "a_shape": lhs.data.shape(), "b_shape": rhs.data.shape()}
@@ -193,6 +202,32 @@ fn tanh(v):
     let out = value.data.tanh()
     return Variable(out, value.requires_grad, [value], "tanh", {"out": out.clone()}, nil)
 
+fn softmax(v, axis: Int = -1):
+    let value = __ensure_variable(v)
+    let actual_axis = __normalize_axis(axis, value.data.rank())
+    let out = value.data.softmax(actual_axis)
+    return Variable(out, value.requires_grad, [value], "softmax", {"out": out.clone(), "axis": actual_axis}, nil)
+
+fn log_softmax(v, axis: Int = -1):
+    let value = __ensure_variable(v)
+    let actual_axis = __normalize_axis(axis, value.data.rank())
+    let out = value.data.log_softmax(actual_axis)
+    return Variable(out, value.requires_grad, [value], "log_softmax", {"out": out.clone(), "axis": actual_axis}, nil)
+
+fn logsumexp(v, axis: Int = -1, keepdim: Bool = false):
+    let value = __ensure_variable(v)
+    let actual_axis = __normalize_axis(axis, value.data.rank())
+    let max_keep = value.data.max_axis(actual_axis, true)
+    let shifted = value.data.sub(max_keep)
+    let exp_shifted = shifted.exp()
+    let sum_exp = exp_shifted.sum_axis(actual_axis, true)
+    let out_keep = sum_exp.log().add(max_keep)
+    let probs = exp_shifted.div(sum_exp)
+    let out = out_keep
+    if not keepdim:
+        out = out.squeeze(actual_axis)
+    return Variable(__as_tensor(out), value.requires_grad, [value], "logsumexp", {"probs": probs, "axis": actual_axis, "keepdim": keepdim, "shape": value.data.shape()}, nil)
+
 fn reshape(v, shape):
     let value = __ensure_variable(v)
     return Variable(value.data.reshape(shape), value.requires_grad, [value], "reshape", {"shape": value.data.shape()}, nil)
@@ -203,12 +238,12 @@ fn transpose(v):
 
 fn sum(v):
     let value = __ensure_variable(v)
-    let scalar = tensor.tensor([value.data.sum()])
+    let scalar = tensor.tensor([value.data.sum()], value.data.device())
     return Variable(scalar, value.requires_grad, [value], "sum", {"shape": value.data.shape()}, nil)
 
 fn mean(v):
     let value = __ensure_variable(v)
-    let scalar = tensor.tensor([value.data.mean()])
+    let scalar = tensor.tensor([value.data.mean()], value.data.device())
     return Variable(scalar, value.requires_grad, [value], "mean", {"shape": value.data.shape(), "count": value.data.len()}, nil)
 
 fn sum_axis(v, axis: Int = -1, keepdim: Bool = false):
@@ -224,6 +259,82 @@ fn mean_axis(v, axis: Int = -1, keepdim: Bool = false):
     let reduced = value.data.mean_axis(actual_axis, keepdim)
     return Variable(__as_tensor(reduced), value.requires_grad, [value], "mean_axis", {"shape": value.data.shape(), "axis": actual_axis, "keepdim": keepdim, "count": count}, nil)
 
+fn select_timestep(v, step: Int):
+    let value = __ensure_variable(v)
+    if value.data.rank() != 3:
+        panic("autograd.select_timestep expects rank-3 input [batch, time, features]")
+    let shape = value.data.shape()
+    let batch = shape[0]
+    let steps = shape[1]
+    let features = shape[2]
+    let actual = step
+    if actual < 0 or actual >= steps:
+        panic("autograd.select_timestep step out of range")
+    let out = tensor.zeros([batch, features], value.data.device())
+    var b = 0
+    while b < batch:
+        var f = 0
+        while f < features:
+            out.set_at(b, f, float(value.data.at(b, actual, f)))
+            f += 1
+        b += 1
+    return Variable(out, value.requires_grad, [value], "select_timestep", {"shape": shape, "step": actual}, nil)
+
+fn embedding(weight, indices):
+    let table = __ensure_variable(weight)
+    if table.data.rank() != 2:
+        panic("autograd.embedding expects weight rank-2 [vocab, dim]")
+    let idx = __as_tensor(indices, table.data.device())
+    if idx.rank() != 1 and idx.rank() != 2:
+        panic("autograd.embedding expects indices rank-1 or rank-2")
+    let ids = []
+    for raw in idx.to_flat_list():
+        let token = int(raw)
+        if token < 0 or token >= table.data.shape()[0]:
+            panic("autograd.embedding index out of range")
+        ids.push(token)
+    let gathered = table.data.take_rows(ids)
+    let out_shape = []
+    for dim in idx.shape():
+        out_shape.push(dim)
+    out_shape.push(table.data.shape()[1])
+    let out = gathered.reshape(out_shape)
+    return Variable(out, table.requires_grad, [table], "embedding", {"indices": ids, "index_shape": idx.shape(), "weight_shape": table.data.shape()}, nil)
+
+fn conv2d(input, weight, bias = nil, stride = 1, padding = 0, dilation = 1):
+    let x = __ensure_variable(input)
+    let w = __ensure_variable_on(weight, x.data.device())
+    let b = nil
+    if bias != nil:
+        b = __ensure_variable_on(bias, x.data.device())
+    let config = __conv2d_config(x.data.shape(), w.data.shape(), stride, padding, dilation)
+    let out = __conv2d_forward(x.data, w.data, b, config)
+    let parents = [x, w]
+    let requires_grad = x.requires_grad or w.requires_grad or (b != nil and b.requires_grad)
+    if b != nil:
+        parents.push(b)
+    return Variable(out, requires_grad, parents, "conv2d", {"input": x.data.clone(), "weight": w.data.clone(), "config": config, "has_bias": b != nil}, nil)
+
+fn avg_pool2d(input, kernel_size, stride = nil, padding = 0):
+    let x = __ensure_variable(input)
+    let config = __pool2d_config(x.data.shape(), kernel_size, stride, padding)
+    let out = __avg_pool2d_forward(x.data, config)
+    return Variable(out, x.requires_grad, [x], "avg_pool2d", {"shape": x.data.shape(), "config": config}, nil)
+
+fn max_pool2d(input, kernel_size, stride = nil, padding = 0):
+    let x = __ensure_variable(input)
+    let config = __pool2d_config(x.data.shape(), kernel_size, stride, padding)
+    let result = __max_pool2d_forward(x.data, config)
+    return Variable(result["output"], x.requires_grad, [x], "max_pool2d", {"shape": x.data.shape(), "config": config, "indices": result["indices"]}, nil)
+
+fn adaptive_avg_pool2d(input, output_size):
+    let x = __ensure_variable(input)
+    if x.data.rank() != 4:
+        panic("autograd.adaptive_avg_pool2d expects rank-4 input [batch, channels, height, width]")
+    let size = __pair(output_size, "autograd.adaptive_avg_pool2d output_size")
+    let out = __adaptive_avg_pool2d_forward(x.data, size)
+    return Variable(out, x.requires_grad, [x], "adaptive_avg_pool2d", {"shape": x.data.shape(), "output_size": size}, nil)
+
 fn matmul(a, b):
     let lhs = __ensure_variable(a)
     let rhs = __ensure_variable(b)
@@ -234,27 +345,62 @@ fn matmul(a, b):
 
 fn bce_with_logits(logits, target):
     let value = __ensure_variable(logits)
-    let target_t = __binary_target_tensor(target, value.data.shape())
+    let target_t = __binary_target_tensor(target, value.data.shape(), value.data.device())
     let probs = value.data.sigmoid()
     let loss = tensor.bce_loss(probs, target_t, EPS)
     let count = max(1, probs.len())
-    return Variable(tensor.tensor([loss]), value.requires_grad, [value], "bce_with_logits", {"probs": probs, "target": target_t, "count": count}, nil)
+    return Variable(tensor.tensor([loss], value.data.device()), value.requires_grad, [value], "bce_with_logits", {"probs": probs, "target": target_t, "count": count}, nil)
 
 fn cross_entropy_with_logits(logits, target):
     let value = __ensure_variable(logits)
     let shape = value.data.shape()
     if value.data.rank() == 1:
         let reshaped = value.data.reshape([1, shape[0]])
-        let target_oh = __class_target_tensor(target, [1, shape[0]])
+        let target_oh = __class_target_tensor(target, [1, shape[0]], value.data.device())
         let probs = reshaped.softmax(1)
         let loss = tensor.cross_entropy_with_logits(reshaped, target_oh)
-        return Variable(tensor.tensor([loss]), value.requires_grad, [value], "cross_entropy_with_logits", {"probs": probs, "target": target_oh, "shape": shape, "batch": 1}, nil)
+        return Variable(tensor.tensor([loss], value.data.device()), value.requires_grad, [value], "cross_entropy_with_logits", {"probs": probs, "target": target_oh, "shape": shape, "batch": 1}, nil)
     if value.data.rank() != 2:
         panic("autograd.cross_entropy_with_logits expects logits rank 1 or 2")
-    let target_oh = __class_target_tensor(target, shape)
+    let target_oh = __class_target_tensor(target, shape, value.data.device())
     let probs = value.data.softmax(1)
     let loss = tensor.cross_entropy_with_logits(value.data, target_oh)
-    return Variable(tensor.tensor([loss]), value.requires_grad, [value], "cross_entropy_with_logits", {"probs": probs, "target": target_oh, "shape": shape, "batch": shape[0]}, nil)
+    return Variable(tensor.tensor([loss], value.data.device()), value.requires_grad, [value], "cross_entropy_with_logits", {"probs": probs, "target": target_oh, "shape": shape, "batch": shape[0]}, nil)
+
+fn gradcheck(fn_ref, inputs, eps: Float64 = 0.0001, atol: Float64 = 0.0001, rtol: Float64 = 0.01):
+    if eps <= 0:
+        panic("autograd.gradcheck expects eps > 0")
+    if atol < 0 or rtol < 0:
+        panic("autograd.gradcheck expects non-negative tolerances")
+    let base_inputs = __gradcheck_inputs(inputs)
+    for input in base_inputs:
+        if input.is_cuda():
+            panic("autograd.gradcheck is CPU-only in v1")
+    let vars = []
+    for input in base_inputs:
+        vars.push(leaf(input.clone(), true, nil))
+    let out = __ensure_variable(fn_ref(vars))
+    if out.data.len() != 1:
+        panic("autograd.gradcheck expects scalar-valued function")
+    out.backward()
+
+    var input_idx = 0
+    while input_idx < len(vars):
+        let analytical = vars[input_idx].grad
+        if analytical == nil:
+            analytical = tensor.zeros_like(base_inputs[input_idx])
+        let total = base_inputs[input_idx].len()
+        var flat_idx = 0
+        while flat_idx < total:
+            let numerical = __numerical_grad(fn_ref, base_inputs, input_idx, flat_idx, eps)
+            let analytical_value = float(analytical.get(flat_idx))
+            let diff = abs(analytical_value - numerical)
+            let allowed = atol + rtol * max(abs(analytical_value), abs(numerical))
+            if diff > allowed:
+                return {"ok": false, "input_index": input_idx, "flat_index": flat_idx, "analytical": analytical_value, "numerical": numerical, "diff": diff, "allowed": allowed}
+            flat_idx += 1
+        input_idx += 1
+    return {"ok": true, "checked_inputs": len(vars)}
 
 fn __backward(root, gradient = nil):
     let value = __ensure_variable(root)
@@ -361,11 +507,8 @@ fn __dispatch_backward(node):
     if node.op == "relu":
         let parent = node.parents[0]
         if parent.requires_grad:
-            let mask = node.ctx["input"].map(fn(v, idx):
-                if v > 0:
-                    return 1.0
-                return 0.0
-            )
+            let active = node.ctx["input"].relu()
+            let mask = active.div(active.clip(EPS, 999999999999999999999999.0))
             __accumulate_grad(parent, node.grad.mul(mask))
         return
 
@@ -381,6 +524,36 @@ fn __dispatch_backward(node):
         if parent.requires_grad:
             let out = node.ctx["out"]
             __accumulate_grad(parent, node.grad.mul(tensor.ones_like(out).sub(out.mul(out))))
+        return
+
+    if node.op == "softmax":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let out = node.ctx["out"]
+            let axis = node.ctx["axis"]
+            let projected = node.grad.mul(out).sum_axis(axis, true)
+            __accumulate_grad(parent, out.mul(node.grad.sub(projected)))
+        return
+
+    if node.op == "log_softmax":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let log_probs = node.ctx["out"]
+            let axis = node.ctx["axis"]
+            let probs = log_probs.exp()
+            let summed = node.grad.sum_axis(axis, true)
+            __accumulate_grad(parent, node.grad.sub(probs.mul(summed)))
+        return
+
+    if node.op == "logsumexp":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let axis = node.ctx["axis"]
+            let keepdim = node.ctx["keepdim"] == true
+            let upstream = node.grad
+            if not keepdim:
+                upstream = upstream.unsqueeze(axis)
+            __accumulate_grad(parent, tensor.ones(node.ctx["shape"], parent.data.device()).mul(upstream).mul(node.ctx["probs"]))
         return
 
     if node.op == "reshape":
@@ -399,14 +572,14 @@ fn __dispatch_backward(node):
         let parent = node.parents[0]
         if parent.requires_grad:
             let scale = __scalar_from_tensor(node.grad)
-            __accumulate_grad(parent, tensor.ones(node.ctx["shape"]).mul(scale))
+            __accumulate_grad(parent, tensor.ones(node.ctx["shape"], parent.data.device()).mul(scale))
         return
 
     if node.op == "mean":
         let parent = node.parents[0]
         if parent.requires_grad:
             let scale = __scalar_from_tensor(node.grad) / node.ctx["count"]
-            __accumulate_grad(parent, tensor.ones(node.ctx["shape"]).mul(scale))
+            __accumulate_grad(parent, tensor.ones(node.ctx["shape"], parent.data.device()).mul(scale))
         return
 
     if node.op == "sum_axis":
@@ -420,6 +593,62 @@ fn __dispatch_backward(node):
         if parent.requires_grad:
             let expanded = __expanded_axis_grad(node.grad, node.ctx["shape"], node.ctx["axis"], node.ctx["keepdim"])
             __accumulate_grad(parent, expanded.div(node.ctx["count"]))
+        return
+
+    if node.op == "select_timestep":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let shape = node.ctx["shape"]
+            let step = node.ctx["step"]
+            let grad_in = tensor.zeros(shape, parent.data.device())
+            let grad_out = node.grad
+            var b = 0
+            while b < shape[0]:
+                var f = 0
+                while f < shape[2]:
+                    grad_in.set_at(b, step, f, float(grad_out.at(b, f)))
+                    f += 1
+                b += 1
+            __accumulate_grad(parent, grad_in)
+        return
+
+    if node.op == "embedding":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            let grad_in = tensor.zeros(node.ctx["weight_shape"], parent.data.device())
+            let grad_rows = node.grad.reshape([len(node.ctx["indices"]), node.ctx["weight_shape"][1]])
+            var i = 0
+            while i < len(node.ctx["indices"]):
+                let token = node.ctx["indices"][i]
+                var d = 0
+                while d < node.ctx["weight_shape"][1]:
+                    let next = float(grad_in.at(token, d)) + float(grad_rows.at(i, d))
+                    grad_in.set_at(token, d, next)
+                    d += 1
+                i += 1
+            __accumulate_grad(parent, grad_in)
+        return
+
+    if node.op == "conv2d":
+        __conv2d_backward(node)
+        return
+
+    if node.op == "avg_pool2d":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, __avg_pool2d_backward(node.grad, node.ctx["shape"], node.ctx["config"]))
+        return
+
+    if node.op == "max_pool2d":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, __max_pool2d_backward(node.grad, node.ctx["shape"], node.ctx["indices"], parent.data.device()))
+        return
+
+    if node.op == "adaptive_avg_pool2d":
+        let parent = node.parents[0]
+        if parent.requires_grad:
+            __accumulate_grad(parent, __adaptive_avg_pool2d_backward(node.grad, node.ctx["shape"], node.ctx["output_size"]))
         return
 
     if node.op == "matmul":
@@ -522,7 +751,7 @@ fn __expanded_axis_grad(grad, shape, axis: Int, keepdim: Bool):
     var g = __as_tensor(grad)
     if not keepdim and len(shape) > 1:
         g = g.unsqueeze(axis)
-    return tensor.ones(shape).mul(g)
+    return tensor.ones(shape, g.device()).mul(g)
 
 fn __reduce_to_shape(grad, shape):
     let target_shape = to_list(shape)
@@ -549,8 +778,8 @@ fn __reduce_to_shape(grad, shape):
         return g
     return g.reshape(target_shape)
 
-fn __binary_target_tensor(target, logits_shape):
-    let t = __as_tensor(target)
+fn __binary_target_tensor(target, logits_shape, device: String):
+    let t = __as_tensor(target, device)
     if __same_shape(t.shape(), logits_shape):
         return t
     if len(logits_shape) == 2 and logits_shape[1] == 1 and t.rank() == 1 and t.shape()[0] == logits_shape[0]:
@@ -559,8 +788,8 @@ fn __binary_target_tensor(target, logits_shape):
         return t.reshape(logits_shape)
     panic("autograd.bce_with_logits target shape mismatch")
 
-fn __class_target_tensor(target, logits_shape):
-    let t = __as_tensor(target)
+fn __class_target_tensor(target, logits_shape, device: String):
+    let t = __as_tensor(target, device)
     let rows = logits_shape[0]
     let cols = logits_shape[1]
     if t.rank() == 2:
@@ -570,8 +799,342 @@ fn __class_target_tensor(target, logits_shape):
     if t.rank() == 1:
         if t.shape()[0] != rows:
             panic("autograd.cross_entropy_with_logits target length mismatch")
-        return tensor.one_hot(t.to_flat_list(), cols)
+        return tensor.one_hot(t.to_flat_list(), cols).to(device)
     panic("autograd.cross_entropy_with_logits targets must be rank-1 labels or rank-2 one-hot")
+
+fn __pair(value, label: String):
+    if __type_of(value) == "list":
+        let parts = to_list(value)
+        if len(parts) != 2:
+            panic("{label} expects pair [h, w]")
+        return [int(parts[0]), int(parts[1])]
+    let scalar = int(value)
+    return [scalar, scalar]
+
+fn __conv2d_config(input_shape, weight_shape, stride, padding, dilation):
+    if len(input_shape) != 4:
+        panic("autograd.conv2d expects input rank-4 [batch, channels, height, width]")
+    if len(weight_shape) != 4:
+        panic("autograd.conv2d expects weight rank-4 [out_channels, in_channels, kernel_h, kernel_w]")
+    if input_shape[1] != weight_shape[1]:
+        panic("autograd.conv2d channel mismatch")
+    let stride_pair = __pair(stride, "autograd.conv2d stride")
+    let pad_pair = __pair(padding, "autograd.conv2d padding")
+    let dil_pair = __pair(dilation, "autograd.conv2d dilation")
+    if stride_pair[0] <= 0 or stride_pair[1] <= 0:
+        panic("autograd.conv2d stride must be > 0")
+    if dil_pair[0] <= 0 or dil_pair[1] <= 0:
+        panic("autograd.conv2d dilation must be > 0")
+    let out_h = int((input_shape[2] + 2 * pad_pair[0] - dil_pair[0] * (weight_shape[2] - 1) - 1) / stride_pair[0]) + 1
+    let out_w = int((input_shape[3] + 2 * pad_pair[1] - dil_pair[1] * (weight_shape[3] - 1) - 1) / stride_pair[1]) + 1
+    if out_h <= 0 or out_w <= 0:
+        panic("autograd.conv2d produced non-positive output size")
+    return {"stride": stride_pair, "padding": pad_pair, "dilation": dil_pair, "out_shape": [input_shape[0], weight_shape[0], out_h, out_w]}
+
+fn __conv2d_forward(x, w, b, config):
+    let out_shape = config["out_shape"]
+    let stride = config["stride"]
+    let padding = config["padding"]
+    let dilation = config["dilation"]
+    let out = tensor.zeros(out_shape, x.device())
+    var n = 0
+    while n < out_shape[0]:
+        var co = 0
+        while co < out_shape[1]:
+            var oy = 0
+            while oy < out_shape[2]:
+                var ox = 0
+                while ox < out_shape[3]:
+                    var sum = 0.0
+                    if b != nil:
+                        sum = float(b.data.at(co))
+                    var ci = 0
+                    while ci < w.shape()[1]:
+                        var ky = 0
+                        while ky < w.shape()[2]:
+                            let in_y = oy * stride[0] - padding[0] + ky * dilation[0]
+                            if in_y >= 0 and in_y < x.shape()[2]:
+                                var kx = 0
+                                while kx < w.shape()[3]:
+                                    let in_x = ox * stride[1] - padding[1] + kx * dilation[1]
+                                    if in_x >= 0 and in_x < x.shape()[3]:
+                                        sum += float(x.at(n, ci, in_y, in_x)) * float(w.at(co, ci, ky, kx))
+                                    kx += 1
+                                ci += 0
+                            ky += 1
+                        ci += 1
+                    out.set_at(n, co, oy, ox, sum)
+                    ox += 1
+                oy += 1
+            co += 1
+        n += 1
+    return out
+
+fn __conv2d_backward(node):
+    let x_parent = node.parents[0]
+    let w_parent = node.parents[1]
+    var b_parent = nil
+    if len(node.parents) > 2:
+        b_parent = node.parents[2]
+    let x = node.ctx["input"]
+    let w = node.ctx["weight"]
+    let grad_out = node.grad
+    let stride = node.ctx["config"]["stride"]
+    let padding = node.ctx["config"]["padding"]
+    let dilation = node.ctx["config"]["dilation"]
+
+    var grad_x = nil
+    var grad_w = nil
+    var grad_b = nil
+    if x_parent.requires_grad:
+        grad_x = tensor.zeros(x.shape(), x_parent.data.device())
+    if w_parent.requires_grad:
+        grad_w = tensor.zeros(w.shape(), w_parent.data.device())
+    if b_parent != nil and b_parent.requires_grad:
+        grad_b = tensor.zeros([w.shape()[0]], b_parent.data.device())
+
+    var n = 0
+    while n < grad_out.shape()[0]:
+        var co = 0
+        while co < grad_out.shape()[1]:
+            var oy = 0
+            while oy < grad_out.shape()[2]:
+                var ox = 0
+                while ox < grad_out.shape()[3]:
+                    let g = float(grad_out.at(n, co, oy, ox))
+                    if grad_b != nil:
+                        grad_b.set_at(co, float(grad_b.at(co)) + g)
+                    var ci = 0
+                    while ci < w.shape()[1]:
+                        var ky = 0
+                        while ky < w.shape()[2]:
+                            let in_y = oy * stride[0] - padding[0] + ky * dilation[0]
+                            if in_y >= 0 and in_y < x.shape()[2]:
+                                var kx = 0
+                                while kx < w.shape()[3]:
+                                    let in_x = ox * stride[1] - padding[1] + kx * dilation[1]
+                                    if in_x >= 0 and in_x < x.shape()[3]:
+                                        if grad_x != nil:
+                                            let next_x = float(grad_x.at(n, ci, in_y, in_x)) + g * float(w.at(co, ci, ky, kx))
+                                            grad_x.set_at(n, ci, in_y, in_x, next_x)
+                                        if grad_w != nil:
+                                            let next_w = float(grad_w.at(co, ci, ky, kx)) + g * float(x.at(n, ci, in_y, in_x))
+                                            grad_w.set_at(co, ci, ky, kx, next_w)
+                                    kx += 1
+                                ci += 0
+                            ky += 1
+                        ci += 1
+                    ox += 1
+                oy += 1
+            co += 1
+        n += 1
+    if grad_x != nil:
+        __accumulate_grad(x_parent, grad_x)
+    if grad_w != nil:
+        __accumulate_grad(w_parent, grad_w)
+    if grad_b != nil:
+        __accumulate_grad(b_parent, grad_b)
+
+fn __pool2d_config(input_shape, kernel_size, stride, padding):
+    if len(input_shape) != 4:
+        panic("pool2d expects input rank-4 [batch, channels, height, width]")
+    let kernel = __pair(kernel_size, "pool2d kernel_size")
+    var actual_stride = nil
+    if stride == nil:
+        actual_stride = [kernel[0], kernel[1]]
+    else:
+        actual_stride = __pair(stride, "pool2d stride")
+    let pad = __pair(padding, "pool2d padding")
+    let out_h = int((input_shape[2] + 2 * pad[0] - kernel[0]) / actual_stride[0]) + 1
+    let out_w = int((input_shape[3] + 2 * pad[1] - kernel[1]) / actual_stride[1]) + 1
+    if out_h <= 0 or out_w <= 0:
+        panic("pool2d produced non-positive output size")
+    return {"kernel": kernel, "stride": actual_stride, "padding": pad, "out_shape": [input_shape[0], input_shape[1], out_h, out_w]}
+
+fn __avg_pool2d_forward(x, config):
+    let kernel = config["kernel"]
+    let stride = config["stride"]
+    let padding = config["padding"]
+    let out_shape = config["out_shape"]
+    let denom = kernel[0] * kernel[1]
+    let out = tensor.zeros(out_shape, x.device())
+    var n = 0
+    while n < out_shape[0]:
+        var c = 0
+        while c < out_shape[1]:
+            var oy = 0
+            while oy < out_shape[2]:
+                var ox = 0
+                while ox < out_shape[3]:
+                    var sum = 0.0
+                    var ky = 0
+                    while ky < kernel[0]:
+                        let in_y = oy * stride[0] - padding[0] + ky
+                        if in_y >= 0 and in_y < x.shape()[2]:
+                            var kx = 0
+                            while kx < kernel[1]:
+                                let in_x = ox * stride[1] - padding[1] + kx
+                                if in_x >= 0 and in_x < x.shape()[3]:
+                                    sum += float(x.at(n, c, in_y, in_x))
+                                kx += 1
+                        ky += 1
+                    out.set_at(n, c, oy, ox, sum / denom)
+                    ox += 1
+                oy += 1
+            c += 1
+        n += 1
+    return out
+
+fn __avg_pool2d_backward(grad_out, input_shape, config):
+    let kernel = config["kernel"]
+    let stride = config["stride"]
+    let padding = config["padding"]
+    let denom = kernel[0] * kernel[1]
+    let grad_in = tensor.zeros(input_shape, grad_out.device())
+    var n = 0
+    while n < grad_out.shape()[0]:
+        var c = 0
+        while c < grad_out.shape()[1]:
+            var oy = 0
+            while oy < grad_out.shape()[2]:
+                var ox = 0
+                while ox < grad_out.shape()[3]:
+                    let g = float(grad_out.at(n, c, oy, ox)) / denom
+                    var ky = 0
+                    while ky < kernel[0]:
+                        let in_y = oy * stride[0] - padding[0] + ky
+                        if in_y >= 0 and in_y < input_shape[2]:
+                            var kx = 0
+                            while kx < kernel[1]:
+                                let in_x = ox * stride[1] - padding[1] + kx
+                                if in_x >= 0 and in_x < input_shape[3]:
+                                    let next = float(grad_in.at(n, c, in_y, in_x)) + g
+                                    grad_in.set_at(n, c, in_y, in_x, next)
+                                kx += 1
+                        ky += 1
+                    ox += 1
+                oy += 1
+            c += 1
+        n += 1
+    return grad_in
+
+fn __max_pool2d_forward(x, config):
+    let kernel = config["kernel"]
+    let stride = config["stride"]
+    let padding = config["padding"]
+    let out_shape = config["out_shape"]
+    let out = tensor.zeros(out_shape, x.device())
+    let indices = []
+    var n = 0
+    while n < out_shape[0]:
+        var c = 0
+        while c < out_shape[1]:
+            var oy = 0
+            while oy < out_shape[2]:
+                var ox = 0
+                while ox < out_shape[3]:
+                    var best = -999999999999999999999999.0
+                    var best_idx = -1
+                    var ky = 0
+                    while ky < kernel[0]:
+                        let in_y = oy * stride[0] - padding[0] + ky
+                        if in_y >= 0 and in_y < x.shape()[2]:
+                            var kx = 0
+                            while kx < kernel[1]:
+                                let in_x = ox * stride[1] - padding[1] + kx
+                                if in_x >= 0 and in_x < x.shape()[3]:
+                                    let value = float(x.at(n, c, in_y, in_x))
+                                    if value > best:
+                                        best = value
+                                        best_idx = __offset4(x.shape(), n, c, in_y, in_x)
+                                kx += 1
+                        ky += 1
+                    out.set_at(n, c, oy, ox, best)
+                    indices.push(best_idx)
+                    ox += 1
+                oy += 1
+            c += 1
+        n += 1
+    return {"output": out, "indices": indices}
+
+fn __max_pool2d_backward(grad_out, input_shape, indices, device: String):
+    let grad_in = tensor.zeros(input_shape, device)
+    let flat = grad_out.to_flat_list()
+    var i = 0
+    while i < len(indices):
+        let dst = int(indices[i])
+        if dst >= 0:
+            grad_in.set(dst, float(grad_in.get(dst)) + float(flat[i]))
+        i += 1
+    return grad_in
+
+fn __adaptive_avg_pool2d_forward(x, output_size):
+    let out_h = output_size[0]
+    let out_w = output_size[1]
+    let shape = x.shape()
+    let out = tensor.zeros([shape[0], shape[1], out_h, out_w], x.device())
+    var n = 0
+    while n < shape[0]:
+        var c = 0
+        while c < shape[1]:
+            var oy = 0
+            while oy < out_h:
+                let h0 = int(oy * shape[2] / out_h)
+                let h1 = int(((oy + 1) * shape[2] + out_h - 1) / out_h)
+                var ox = 0
+                while ox < out_w:
+                    let w0 = int(ox * shape[3] / out_w)
+                    let w1 = int(((ox + 1) * shape[3] + out_w - 1) / out_w)
+                    let count = max(1, (h1 - h0) * (w1 - w0))
+                    var sum = 0.0
+                    var iy = h0
+                    while iy < h1:
+                        var ix = w0
+                        while ix < w1:
+                            sum += float(x.at(n, c, iy, ix))
+                            ix += 1
+                        iy += 1
+                    out.set_at(n, c, oy, ox, sum / count)
+                    ox += 1
+                oy += 1
+            c += 1
+        n += 1
+    return out
+
+fn __adaptive_avg_pool2d_backward(grad_out, input_shape, output_size):
+    let out_h = output_size[0]
+    let out_w = output_size[1]
+    let grad_in = tensor.zeros(input_shape, grad_out.device())
+    var n = 0
+    while n < input_shape[0]:
+        var c = 0
+        while c < input_shape[1]:
+            var oy = 0
+            while oy < out_h:
+                let h0 = int(oy * input_shape[2] / out_h)
+                let h1 = int(((oy + 1) * input_shape[2] + out_h - 1) / out_h)
+                var ox = 0
+                while ox < out_w:
+                    let w0 = int(ox * input_shape[3] / out_w)
+                    let w1 = int(((ox + 1) * input_shape[3] + out_w - 1) / out_w)
+                    let count = max(1, (h1 - h0) * (w1 - w0))
+                    let g = float(grad_out.at(n, c, oy, ox)) / count
+                    var iy = h0
+                    while iy < h1:
+                        var ix = w0
+                        while ix < w1:
+                            let next = float(grad_in.at(n, c, iy, ix)) + g
+                            grad_in.set_at(n, c, iy, ix, next)
+                            ix += 1
+                        iy += 1
+                    ox += 1
+                oy += 1
+            c += 1
+        n += 1
+    return grad_in
+
+fn __offset4(shape, a: Int, b: Int, c: Int, d: Int):
+    return ((a * shape[1] + b) * shape[2] + c) * shape[3] + d
 
 fn __normalize_axis(axis: Int, rank: Int):
     var out = axis
@@ -602,7 +1165,45 @@ fn __ensure_variable(value):
         return value
     return variable(value, false)
 
-fn __as_tensor(value):
+fn __ensure_variable_on(value, device: String):
+    if __type_of(value) == "instance" and value.kind == "variable":
+        return value
+    if __type_of(value) == "instance" and value.kind == "parameter":
+        return value.variable()
+    return variable(__as_tensor(value, device), false)
+
+fn __as_tensor(value, device = nil):
     if __type_of(value) == "instance" and value.kind == "variable":
         return value.data
-    return tensor.tensor(value)
+    return tensor.tensor(value, device)
+
+fn __gradcheck_inputs(inputs):
+    let out = []
+    for value in to_list(inputs):
+        out.push(__as_tensor(value))
+    if len(out) == 0:
+        panic("autograd.gradcheck expects at least one input tensor")
+    return out
+
+fn __numerical_grad(fn_ref, inputs, input_idx: Int, flat_idx: Int, eps: Float64) -> Float64:
+    let plus_inputs = __clone_input_list(inputs)
+    let minus_inputs = __clone_input_list(inputs)
+    plus_inputs[input_idx].set(flat_idx, float(plus_inputs[input_idx].get(flat_idx)) + eps)
+    minus_inputs[input_idx].set(flat_idx, float(minus_inputs[input_idx].get(flat_idx)) - eps)
+    let out_plus = __ensure_variable(fn_ref(__gradcheck_variables(plus_inputs, false)))
+    let out_minus = __ensure_variable(fn_ref(__gradcheck_variables(minus_inputs, false)))
+    if out_plus.data.len() != 1 or out_minus.data.len() != 1:
+        panic("autograd.gradcheck numerical evaluation expects scalar output")
+    return (out_plus.item() - out_minus.item()) / (2.0 * eps)
+
+fn __clone_input_list(inputs):
+    let out = []
+    for value in inputs:
+        out.push(value.clone())
+    return out
+
+fn __gradcheck_variables(inputs, requires_grad: Bool):
+    let out = []
+    for value in inputs:
+        out.push(variable(value, requires_grad))
+    return out

@@ -18,6 +18,16 @@ fn regression_data():
         i += 1
     return {"X": tensor.tensor(rows), "y": tensor.tensor(targets)}
 
+fn min_value(values):
+    let items = to_list(values)
+    let best = items[0]
+    var i = 1
+    while i < len(items):
+        if items[i] < best:
+            best = items[i]
+        i += 1
+    return best
+
 fn main():
     let X_xor = tensor.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
     let y_xor = tensor.tensor([0.0, 1.0, 1.0, 0.0])
@@ -51,3 +61,22 @@ fn main():
     test.assert_approx(preds_before[1], preds_after[1], 0.000001)
     test.assert_approx(preds_before[2], preds_after[2], 0.000001)
     test.assert_approx(preds_before[3], preds_after[3], 0.000001)
+
+    let train_X = reg["X"].slice_rows(0, 16)
+    let train_y = reg["y"].slice_rows(0, 16)
+    let valid_X = reg["X"].slice_rows(16, 21)
+    let valid_y = reg["y"].slice_rows(16, 21)
+    let train_loader = loader.data_loader(loader.tensor_dataset(train_X, train_y), 8, true, false, 19)
+    let valid_loader = loader.data_loader(loader.tensor_dataset(valid_X, valid_y), 5, false, false, 19)
+    let sched_model = nn.sequential([nn.linear(2, 8, true, "xavier_uniform"), nn.tanh(), nn.linear(8, 1)])
+    let sched_cfg = {"epochs": 40, "verbose": false, "seed": 19, "scheduler": {"name": "step", "step_size": 2, "gamma": 0.5}, "weight_decay": 0.001, "early_stopping_patience": 6, "restore_best": true}
+    let sched_trainer = trainer.trainer("regression", optim.adam(0.03), nil, nil, sched_cfg)
+    let sched_fit = sched_trainer.fit(sched_model, train_loader, valid_loader)
+    let lr_history = sched_fit["history"]["lr"]
+    let grad_history = sched_fit["history"]["grad_norm"]
+    test.assert_true(len(lr_history) > 0)
+    test.assert_true(len(grad_history) == len(lr_history))
+    test.assert_true(lr_history[0] > lr_history[len(lr_history) - 1])
+    test.assert_true(grad_history[0] > 0.0)
+    let valid_after = sched_trainer.evaluate(sched_model, valid_loader)
+    test.assert_approx(valid_after["loss"], min_value(sched_fit["history"]["valid_loss"]), 0.000001)

@@ -20,14 +20,13 @@ class Imputer:
     fn fit(tbl):
         let cols = __columns_or_all(tbl, self.columns)
         for name in cols:
-            let values = __col_values(tbl, name)
             let fill = nil
             if self.strategy == "mean":
-                fill = __mean(values)
+                fill = __mean(__col_values(tbl, name))
             elif self.strategy == "median":
-                fill = __median(values)
+                fill = __median(__col_values(tbl, name))
             elif self.strategy == "mode":
-                fill = __mode(values)
+                fill = __mode(__col_values_raw(tbl, name))
             elif self.strategy == "constant":
                 fill = self.fill_value
             else:
@@ -229,9 +228,12 @@ class OneHotEncoder:
 
     fn transform(tbl):
         let cols = __columns_or_all(tbl, self.columns)
+        let drop = {}
+        for name in cols:
+            drop[name] = true
         let base_cols = []
         for name in tbl.columns:
-            if not __contains(cols, name):
+            if drop[name] != true:
                 base_cols.push(name)
         let new_cols = to_list(base_cols)
         for name in cols:

@@ -5,6 +5,7 @@ import std.autograd as autograd
 import std.math as math
 
 let EPS = 0.000000000001
+let DROPOUT_STATE = {"seed": 1234567}
 
 fn linear(x, weight, bias = nil):
     let input = __as_variable(x)
@@ -23,6 +24,33 @@ fn sigmoid(x):
 fn tanh(x):
     return __as_variable(x).tanh()
 
+fn softmax(x, axis: Int = -1):
+    return __as_variable(x).softmax(axis)
+
+fn log_softmax(x, axis: Int = -1):
+    return __as_variable(x).log_softmax(axis)
+
+fn logsumexp(x, axis: Int = -1, keepdim: Bool = false):
+    return __as_variable(x).logsumexp(axis, keepdim)
+
+fn embedding(indices, weight):
+    return autograd.embedding(weight, indices)
+
+fn conv2d(x, weight, bias = nil, stride = 1, padding = 0, dilation = 1):
+    return autograd.conv2d(__as_variable(x), __as_variable(weight), __maybe_variable(bias), stride, padding, dilation)
+
+fn avg_pool2d(x, kernel_size, stride = nil, padding = 0):
+    return autograd.avg_pool2d(__as_variable(x), kernel_size, stride, padding)
+
+fn max_pool2d(x, kernel_size, stride = nil, padding = 0):
+    return autograd.max_pool2d(__as_variable(x), kernel_size, stride, padding)
+
+fn adaptive_avg_pool2d(x, output_size):
+    return autograd.adaptive_avg_pool2d(__as_variable(x), output_size)
+
+fn select_timestep(x, step: Int):
+    return autograd.select_timestep(__as_variable(x), step)
+
 fn dropout(x, p: Float64 = 0.5, training: Bool = true, seed = nil):
     let input = __as_variable(x)
     if not training or p <= 0:
@@ -30,7 +58,7 @@ fn dropout(x, p: Float64 = 0.5, training: Bool = true, seed = nil):
     if p >= 1:
         panic("nn.functional.dropout expects p < 1")
     let keep = 1.0 - p
-    let mask = __dropout_mask(input.data.shape(), keep, seed)
+    let mask = __dropout_mask(input.data.shape(), keep, seed, input.data.device())
     return input.mul(mask)
 
 fn layer_norm(x, gamma = nil, beta = nil, eps: Float64 = 0.00001):
@@ -79,14 +107,12 @@ fn batch_norm1d(x, running_mean, running_var, gamma = nil, beta = nil, training:
         out = out.add(__as_variable(beta))
     return out
 
-fn __dropout_mask(shape, keep: Float64, seed = nil):
-    if seed == nil:
-        return tensor.rand(shape, 0.0, 1.0).map(fn(v, idx):
-            if v < keep:
-                return 1.0 / keep
-            return 0.0
-        )
-    let rng = math.rng(int(seed))
+fn __dropout_mask(shape, keep: Float64, seed = nil, device = nil):
+    let actual_seed = seed
+    if actual_seed == nil:
+        actual_seed = DROPOUT_STATE["seed"]
+        DROPOUT_STATE["seed"] = int(actual_seed) + 1
+    let rng = math.rng(int(actual_seed))
     let total = __shape_size(shape)
     let values = []
     var i = 0
@@ -97,7 +123,7 @@ fn __dropout_mask(shape, keep: Float64, seed = nil):
         else:
             values.push(0.0)
         i += 1
-    return tensor.tensor(values).reshape(shape)
+    return tensor.tensor(values, device).reshape(shape)
 
 fn __shape_size(shape) -> Int:
     var out = 1
@@ -112,3 +138,8 @@ fn __as_variable(value):
     if tag == "instance" and value.kind == "parameter":
         return value.variable()
     return autograd.variable(value, false)
+
+fn __maybe_variable(value):
+    if value == nil:
+        return nil
+    return __as_variable(value)

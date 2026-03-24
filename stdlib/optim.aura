@@ -150,6 +150,25 @@ fn set_lr(opt, lr: Float64):
     opt["lr"] = lr
     return opt
 
+fn get_weight_decay(opt) -> Float64:
+    if opt["name"] == "lookahead":
+        return get_weight_decay(opt["inner"])
+    if opt["weight_decay"] == nil:
+        return 0.0
+    return float(opt["weight_decay"])
+
+fn set_weight_decay(opt, weight_decay: Float64):
+    if weight_decay < 0:
+        panic("optim.set_weight_decay expects weight_decay >= 0")
+    if opt["name"] == "lookahead":
+        set_weight_decay(opt["inner"], weight_decay)
+        return opt
+    if opt["weight_decay"] == nil:
+        let name = opt["name"]
+        panic("optim.set_weight_decay optimizer '{name}' does not support weight_decay")
+    opt["weight_decay"] = weight_decay
+    return opt
+
 fn state(opt):
     return __state(opt)
 

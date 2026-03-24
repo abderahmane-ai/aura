@@ -12,15 +12,15 @@ class TensorDataset:
     fn init(X, y = nil):
         self.kind = "tensor_dataset"
         self.X = tensor.tensor(X)
-        if self.X.rank() != 1 and self.X.rank() != 2:
-            panic("data.loader.TensorDataset expects X rank 1 or 2")
+        if self.X.rank() < 1:
+            panic("data.loader.TensorDataset expects X rank >= 1")
         self.size = self.X.shape()[0]
         if y == nil:
             self.y = nil
         else:
             self.y = tensor.tensor(y)
-            if self.y.rank() != 1 and self.y.rank() != 2:
-                panic("data.loader.TensorDataset expects y rank 1 or 2")
+            if self.y.rank() < 1:
+                panic("data.loader.TensorDataset expects y rank >= 1")
             if self.y.shape()[0] != self.size:
                 panic("data.loader.TensorDataset expects X and y with same sample count")
 

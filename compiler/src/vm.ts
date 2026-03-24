@@ -8,6 +8,17 @@ import {
     getInstanceAttr, getModuleAttr, makeIterator, iterNext, DONE,
 } from './builtins.js';
 import { AuraError, runtimeError, StackFrame } from './errors.js';
+import {
+    NativeTensorData,
+    cloneTensorData,
+    isTensorData,
+    makeTensorData,
+    requireCudaAddon,
+    tensorDevice,
+    tensorIsCuda,
+    tensorMaterializeCPU,
+    tensorSize,
+} from './tensor_runtime.js';
 
 interface NativeHeapData {
     items: Value[];
@@ -18,11 +29,6 @@ interface NativeIndexedData {
     keys: string[];
     items: Value[];
     maps: Map<string, Map<string, number[]>>;
-}
-
-interface NativeTensorData {
-    shape: number[];
-    values: number[];
 }
 
 interface CallFrame {
@@ -1255,7 +1261,20 @@ export class VM {
 
     private getTensorAttr(native: AuraNative, attr: string): Value {
         const data = this.expectTensor(native);
+        if (tensorIsCuda(data)) return this.getCudaTensorAttr(native, attr);
         const methods: Record<string, () => Value> = {
+            device: () => tensorDevice(data),
+            is_cuda: () => false,
+            cpu: () => native,
+            cuda: () => this.builtin('tensor.cuda', ([device]: Value[]) => {
+                if (device === undefined || device === null) return this.tensorTransferNative(native, 'cuda:0', 'tensor.cuda');
+                if (typeof device !== 'string') runtimeError('tensor.cuda(device) expects device string');
+                return this.tensorTransferNative(native, device, 'tensor.cuda');
+            }),
+            to: () => this.builtin('tensor.to', ([device]: Value[]) => {
+                if (typeof device !== 'string') runtimeError('tensor.to(device) expects device string');
+                return this.tensorTransferNative(native, device, 'tensor.to');
+            }),
             len: () => data.values.length,
             rank: () => data.shape.length,
             shape: () => ({ type: 'list', items: [...data.shape] } as AuraList),
@@ -1475,6 +1494,215 @@ export class VM {
         if (!(attr in methods)) runtimeError('Tensor has no attribute ' + "'" + attr + "'");
         const value = methods[attr]();
         return (value as any)?.type === 'builtin' ? value : this.builtin('tensor.' + attr, () => value);
+    }
+
+    private getCudaTensorAttr(native: AuraNative, attr: string): Value {
+        const data = this.expectTensor(native);
+        const methods: Record<string, () => Value> = {
+            device: () => tensorDevice(data),
+            is_cuda: () => true,
+            len: () => tensorSize(data.shape),
+            rank: () => data.shape.length,
+            shape: () => ({ type: 'list', items: [...data.shape] } as AuraList),
+            to_list: () => {
+                const host = this.tensorHostData(data, `tensor.${attr}`);
+                return this.tensorToNested(host.shape, host.values ?? []);
+            },
+            to_flat_list: () => {
+                const host = this.tensorHostData(data, `tensor.${attr}`);
+                return { type: 'list', items: (host.values ?? []).map((v) => v as Value) } as AuraList;
+            },
+            clone: () => ({ type: 'native', kind: 'tensor', data: cloneTensorData(data, 'tensor.clone') } as AuraNative),
+            cpu: () => this.tensorTransferNative(native, 'cpu', 'tensor.cpu'),
+            cuda: () => this.builtin('tensor.cuda', ([device]: Value[]) => {
+                if (device === undefined || device === null) return this.tensorTransferNative(native, 'cuda:0', 'tensor.cuda');
+                if (typeof device !== 'string') runtimeError('tensor.cuda(device) expects device string');
+                return this.tensorTransferNative(native, device, 'tensor.cuda');
+            }),
+            to: () => this.builtin('tensor.to', ([device]: Value[]) => {
+                if (typeof device !== 'string') runtimeError('tensor.to(device) expects device string');
+                return this.tensorTransferNative(native, device, 'tensor.to');
+            }),
+            get: () => this.builtin('tensor.get', ([idx]: Value[]) => this.cudaTensorOpValue<number>('get', [data, this.expectInteger(idx, 'tensor.get')], {})),
+            set: () => this.builtin('tensor.set', ([idx, value]: Value[]) => {
+                native.data = this.cudaTensorOpTensor('set', [data, this.expectInteger(idx, 'tensor.set'), this.asNumber(value, 'tensor.set')], {}, 'tensor.set');
+                return native;
+            }),
+            at: () => this.builtin('tensor.at', (args: Value[]) => this.cudaTensorOpValue<number>('at', [data, ...args.map((arg) => this.expectInteger(arg, 'tensor.at'))], {})),
+            set_at: () => this.builtin('tensor.set_at', (args: Value[]) => {
+                if (args.length < 2) runtimeError('tensor.set_at(i..., value) expects indices and value');
+                const indexArgs = args.slice(0, args.length - 1).map((arg) => this.expectInteger(arg, 'tensor.set_at'));
+                const value = this.asNumber(args[args.length - 1], 'tensor.set_at');
+                native.data = this.cudaTensorOpTensor('set_at', [data, ...indexArgs, value], {}, 'tensor.set_at');
+                return native;
+            }),
+            fill_: () => this.builtin('tensor.fill_', ([value]: Value[]) => {
+                native.data = this.cudaTensorOpTensor('fill', [data, this.asNumber(value, 'tensor.fill_')], {}, 'tensor.fill_');
+                return native;
+            }),
+            map: () => this.builtin('tensor.map', () => runtimeError('tensor.map is not supported on cuda tensors in v1')),
+            zip_map: () => this.builtin('tensor.zip_map', () => runtimeError('tensor.zip_map is not supported on cuda tensors in v1')),
+        };
+
+        const tensorOps = new Set([
+            'flatten', 'reshape', 'transpose', 'sum_axis', 'mean_axis', 'var_axis', 'max_axis', 'argmax_axis',
+            'unsqueeze', 'squeeze', 'slice_rows', 'take_rows',
+            'add', 'sub', 'mul', 'div', 'pow', 'exp', 'log', 'sigmoid', 'relu', 'tanh', 'abs', 'sqrt',
+            'clip', 'normalize', 'softmax', 'log_softmax', 'matmul',
+        ]);
+        const scalarOps = new Set(['sum', 'mean', 'min', 'max', 'argmin', 'argmax', 'variance', 'std', 'l2_norm', 'dot', 'mse_loss', 'bce_loss']);
+        const inplaceBinaryOps = new Set(['add_', 'sub_', 'mul_', 'div_']);
+
+        if (attr in methods) {
+            const value = methods[attr]();
+            return (value as any)?.type === 'builtin' ? value : this.builtin('tensor.' + attr, () => value);
+        }
+
+        if (tensorOps.has(attr)) {
+            return this.builtin('tensor.' + attr, (args: Value[]) => this.cudaTensorDispatch(native, data, attr, args));
+        }
+        if (scalarOps.has(attr)) {
+            return this.builtin('tensor.' + attr, (args: Value[]) => this.cudaTensorScalarDispatch(data, attr, args));
+        }
+        if (inplaceBinaryOps.has(attr)) {
+            return this.builtin('tensor.' + attr, (args: Value[]) => {
+                native.data = (this.cudaTensorDispatch(native, data, attr.slice(0, -1), args, true) as AuraNative).data;
+                return native;
+            });
+        }
+
+        runtimeError('Tensor has no attribute ' + "'" + attr + "'");
+    }
+
+    private tensorTransferNative(native: AuraNative, device: string, context: string): AuraNative {
+        const data = this.expectTensor(native);
+        try {
+            const normalized = device;
+            const host = tensorMaterializeCPU(data, context);
+            return { type: 'native', kind: 'tensor', data: makeTensorData(host.shape, host.values ?? [], normalized) } as AuraNative;
+        } catch (err) {
+            runtimeError(`${context}: ${(err as Error).message}`);
+        }
+    }
+
+    private tensorHostData(data: NativeTensorData, context: string): NativeTensorData {
+        try {
+            return tensorMaterializeCPU(data, context);
+        } catch (err) {
+            runtimeError(`${context}: ${(err as Error).message}`);
+        }
+    }
+
+    private cudaTensorScalarDispatch(data: NativeTensorData, attr: string, args: Value[]): Value {
+        switch (attr) {
+            case 'variance':
+                return this.cudaTensorOpValue<number>('variance', [data], { sample: args[0] === true });
+            case 'std': {
+                const variance = this.cudaTensorOpValue<number>('variance', [data], { sample: args[0] === true });
+                return Math.sqrt(this.asNumber(variance, 'tensor.std'));
+            }
+            case 'dot': {
+                const rhs = this.tensorFromValue(args[0], 'tensor.dot');
+                return this.cudaTensorOpValue<number>('dot', [data, rhs], {}, 'tensor.dot');
+            }
+            case 'mse_loss': {
+                const rhs = this.tensorFromValue(args[0], 'tensor.mse_loss');
+                return this.cudaTensorOpValue<number>('mse_loss', [data, rhs], {}, 'tensor.mse_loss');
+            }
+            case 'bce_loss': {
+                const rhs = this.tensorFromValue(args[0], 'tensor.bce_loss');
+                const eps = args[1] === undefined ? 1e-12 : this.asNumber(args[1], 'tensor.bce_loss eps');
+                return this.cudaTensorOpValue<number>('bce_loss', [data, rhs], { eps }, 'tensor.bce_loss');
+            }
+            default:
+                return this.cudaTensorOpValue(attr, [data], {});
+        }
+    }
+
+    private cudaTensorDispatch(native: AuraNative, data: NativeTensorData, attr: string, args: Value[], inplace = false): AuraNative {
+        switch (attr) {
+            case 'reshape': {
+                const dimsRaw = args.length === 1 && (args[0] as any)?.type === 'list' ? (args[0] as AuraList).items : args;
+                const dims = dimsRaw.map((raw) => this.expectInteger(raw, 'tensor.reshape'));
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('reshape', [data], { shape: dims }, 'tensor.reshape') } as AuraNative;
+            }
+            case 'sum_axis':
+            case 'mean_axis':
+            case 'max_axis': {
+                const axis = args[0] ?? -1;
+                const keepdim = args[1] === true;
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor(attr, [data], { axis: this.asNumber(axis, `tensor.${attr} axis`), keepdim }, `tensor.${attr}`) } as AuraNative;
+            }
+            case 'var_axis': {
+                const axis = args[0] ?? -1;
+                const keepdim = args[1] === true;
+                const unbiased = args[2] === true;
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('var_axis', [data], { axis: this.asNumber(axis, 'tensor.var_axis axis'), keepdim, unbiased }, 'tensor.var_axis') } as AuraNative;
+            }
+            case 'argmax_axis':
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('argmax_axis', [data], { axis: this.asNumber(args[0] ?? -1, 'tensor.argmax_axis axis') }, 'tensor.argmax_axis') } as AuraNative;
+            case 'unsqueeze':
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('unsqueeze', [data], { axis: this.expectInteger(args[0], 'tensor.unsqueeze axis') }, 'tensor.unsqueeze') } as AuraNative;
+            case 'squeeze':
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('squeeze', [data], { axis: args[0] === undefined ? null : this.expectInteger(args[0], 'tensor.squeeze axis') }, 'tensor.squeeze') } as AuraNative;
+            case 'slice_rows':
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('slice_rows', [data], { start: args[0] === undefined ? 0 : this.expectInteger(args[0], 'tensor.slice_rows start'), stop: args[1] === undefined || args[1] === null ? null : this.expectInteger(args[1], 'tensor.slice_rows stop') }, 'tensor.slice_rows') } as AuraNative;
+            case 'take_rows':
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('take_rows', [data], { indices: this.valueListToNumbers(args[0], 'tensor.take_rows') }, 'tensor.take_rows') } as AuraNative;
+            case 'clip':
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('clip', [data], { min: this.asNumber(args[0], 'tensor.clip min'), max: this.asNumber(args[1], 'tensor.clip max') }, 'tensor.clip') } as AuraNative;
+            case 'normalize':
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('normalize', [data], { eps: args[0] === undefined ? 1e-12 : this.asNumber(args[0], 'tensor.normalize eps') }, 'tensor.normalize') } as AuraNative;
+            case 'softmax':
+            case 'log_softmax':
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor(attr, [data], { axis: args[0] === undefined ? -1 : this.asNumber(args[0], `tensor.${attr} axis`) }, `tensor.${attr}`) } as AuraNative;
+            case 'matmul': {
+                const rhs = this.tensorFromValue(args[0], 'tensor.matmul');
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('matmul', [data, rhs], {}, 'tensor.matmul') } as AuraNative;
+            }
+            case 'add':
+            case 'sub':
+            case 'mul':
+            case 'div':
+            case 'pow': {
+                const rhs = typeof args[0] === 'number'
+                    ? makeTensorData([1], [args[0] as number], data.device)
+                    : this.tensorFromValue(args[0], `tensor.${attr}`);
+                const result = this.cudaTensorOpTensor(attr, [data, rhs], {}, `tensor.${attr}`);
+                if (inplace) {
+                    native.data = result;
+                    return native;
+                }
+                return { type: 'native', kind: 'tensor', data: result } as AuraNative;
+            }
+            default:
+                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor(attr, [data], {}, `tensor.${attr}`) } as AuraNative;
+        }
+    }
+
+    private valueListToNumbers(value: Value, context: string): number[] {
+        if ((value as any)?.type !== 'list') runtimeError(`${context} expects list`);
+        return (value as AuraList).items.map((item) => this.expectInteger(item, context));
+    }
+
+    private cudaTensorOpTensor(op: string, args: Array<NativeTensorData | number | number[]>, options: Record<string, unknown>, context = `tensor.${op}`): NativeTensorData {
+        try {
+            const addon = requireCudaAddon(context);
+            const out = addon.runTensorOp(op, args as Array<number | string | boolean | NativeTensorData | number[]>, options) as NativeTensorData;
+            if (!isTensorData(out)) throw new Error(`${context}: addon returned invalid tensor result`);
+            return out;
+        } catch (err) {
+            runtimeError(`${context}: ${(err as Error).message}`);
+        }
+    }
+
+    private cudaTensorOpValue<T extends Value>(op: string, args: Array<NativeTensorData | number>, options: Record<string, unknown>, context = `tensor.${op}`): T {
+        try {
+            const addon = requireCudaAddon(context);
+            return addon.runTensorOp(op, args as Array<number | string | boolean | NativeTensorData | number[]>, options) as T;
+        } catch (err) {
+            runtimeError(`${context}: ${(err as Error).message}`);
+        }
     }
 
     private tensorSize(shape: number[]): number {
@@ -1862,7 +2090,7 @@ export class VM {
     }
 
     private tensorSliceRows(data: NativeTensorData, startValue: Value, stopValue: Value): AuraNative {
-        if (data.shape.length !== 1 && data.shape.length !== 2) runtimeError('tensor.slice_rows currently supports rank-1 and rank-2 tensors');
+        if (data.shape.length < 1) runtimeError('tensor.slice_rows expects rank >= 1 tensor');
         const rows = data.shape[0];
         let start = startValue === undefined || startValue === null ? 0 : this.expectInteger(startValue, 'tensor.slice_rows start');
         let stop = stopValue === undefined || stopValue === null ? rows : this.expectInteger(stopValue, 'tensor.slice_rows stop');
@@ -1870,43 +2098,32 @@ export class VM {
         if (stop < 0) stop += rows;
         start = Math.max(0, Math.min(rows, start));
         stop = Math.max(start, Math.min(rows, stop));
-        if (data.shape.length === 1) {
-            return {
-                type: 'native',
-                kind: 'tensor',
-                data: { shape: [stop - start], values: data.values.slice(start, stop) } as NativeTensorData,
-            } as AuraNative;
-        }
-        const cols = data.shape[1];
+        const rowShape = data.shape.slice(1);
+        const rowSize = rowShape.length === 0 ? 1 : this.tensorSize(rowShape);
         return {
             type: 'native',
             kind: 'tensor',
-            data: { shape: [stop - start, cols], values: data.values.slice(start * cols, stop * cols) } as NativeTensorData,
+            data: { shape: [stop - start, ...rowShape], values: data.values.slice(start * rowSize, stop * rowSize) } as NativeTensorData,
         } as AuraNative;
     }
 
     private tensorTakeRows(data: NativeTensorData, indicesValue: Value): AuraNative {
-        if (data.shape.length !== 1 && data.shape.length !== 2) runtimeError('tensor.take_rows currently supports rank-1 and rank-2 tensors');
+        if (data.shape.length < 1) runtimeError('tensor.take_rows expects rank >= 1 tensor');
         if ((indicesValue as any)?.type !== 'list') runtimeError('tensor.take_rows expects indices as list');
         const indices = (indicesValue as AuraList).items;
         const rows = data.shape[0];
-        if (data.shape.length === 1) {
-            const out = new Array<number>(indices.length);
-            for (let i = 0; i < indices.length; i++) {
-                const idx = this.resolveIndex(indices[i], rows, 'tensor.take_rows');
-                out[i] = data.values[idx];
-            }
-            return { type: 'native', kind: 'tensor', data: { shape: [indices.length], values: out } as NativeTensorData } as AuraNative;
-        }
-        const cols = data.shape[1];
-        const out = new Array<number>(indices.length * cols);
+        const rowShape = data.shape.slice(1);
+        const rowSize = rowShape.length === 0 ? 1 : this.tensorSize(rowShape);
+        const out = new Array<number>(indices.length * rowSize);
         for (let i = 0; i < indices.length; i++) {
             const idx = this.resolveIndex(indices[i], rows, 'tensor.take_rows');
-            for (let c = 0; c < cols; c++) {
-                out[i * cols + c] = data.values[idx * cols + c];
+            const src = idx * rowSize;
+            const dst = i * rowSize;
+            for (let j = 0; j < rowSize; j++) {
+                out[dst + j] = data.values[src + j];
             }
         }
-        return { type: 'native', kind: 'tensor', data: { shape: [indices.length, cols], values: out } as NativeTensorData } as AuraNative;
+        return { type: 'native', kind: 'tensor', data: { shape: [indices.length, ...rowShape], values: out } as NativeTensorData } as AuraNative;
     }
 
     private tensorSoftmax(data: NativeTensorData, axisValue: Value, logOutput: boolean): AuraNative {
@@ -2206,7 +2423,7 @@ export class VM {
             }
             if (native.kind === 'tensor') {
                 const tensor = this.expectTensor(native);
-                return { type: 'native', kind: 'tensor', data: { shape: [...tensor.shape], values: [...tensor.values] } };
+                return { type: 'native', kind: 'tensor', data: cloneTensorData(tensor, 'vm.cloneValue') };
             }
             const items = this.expectNativeArray(native, 'clone').map((item) => this.cloneValue(item));
             return { type: 'native', kind: native.kind, data: items };

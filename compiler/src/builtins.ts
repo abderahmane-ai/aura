@@ -3,6 +3,19 @@ import {
     AuraFunction, AuraClass, AuraInstance, AuraEnum, AuraModule, BuiltinFn, AuraMeasure,
 } from './types.js';
 import { runtimeError } from './errors.js';
+import {
+    NativeTensorData,
+    cudaAvailable,
+    cudaDeviceCount,
+    cudaSynchronize,
+    isTensorData,
+    makeTensorData,
+    normalizeTensorDevice,
+    setTensorDefaultDevice,
+    tensorDefaultDevice,
+    tensorMaterializeCPU,
+    tensorSize,
+} from './tensor_runtime.js';
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename as pathBasename, dirname as pathDirname, extname as pathExtname, isAbsolute, join as pathJoin, normalize as pathNormalize, resolve as pathResolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -16,11 +29,6 @@ interface NativeIndexedData {
     keys: string[];
     items: Value[];
     maps: Map<string, Map<string, number[]>>;
-}
-
-interface NativeTensorData {
-    shape: number[];
-    values: number[];
 }
 
 function isList(v: Value): v is AuraList {
@@ -43,21 +51,6 @@ function isIndexedData(data: unknown): data is NativeIndexedData {
     const d = data as NativeIndexedData;
     return typeof d === 'object' && d !== null &&
         Array.isArray(d.keys) && Array.isArray(d.items) && d.maps instanceof Map;
-}
-
-function tensorSize(shape: number[]): number {
-    let size = 1;
-    for (const dim of shape) size *= dim;
-    return size;
-}
-
-function isTensorData(data: unknown): data is NativeTensorData {
-    const d = data as NativeTensorData;
-    return typeof d === 'object' && d !== null &&
-        Array.isArray(d.shape) && Array.isArray(d.values) &&
-        d.shape.every((dim) => Number.isInteger(dim) && dim >= 0) &&
-        d.values.every((v) => typeof v === 'number') &&
-        tensorSize(d.shape) === d.values.length;
 }
 
 function tensorToNested(shape: number[], values: number[]): Value {
@@ -100,17 +93,33 @@ function flattenTensorInput(input: Value): { shape: number[]; values: number[] }
     return flat;
 }
 
-function makeTensorFromValue(value: Value): AuraNative {
+function tensorDeviceArg(deviceValue: Value | undefined, context: string): string | undefined {
+    if (deviceValue === undefined || deviceValue === null) return undefined;
+    if (typeof deviceValue !== 'string') runtimeError(`${context} device must be a string`);
+    try {
+        return normalizeTensorDevice(deviceValue);
+    } catch (err) {
+        runtimeError((err as Error).message);
+    }
+}
+
+function makeTensorFromValue(value: Value, deviceValue?: Value): AuraNative {
+    const device = tensorDeviceArg(deviceValue, 'Tensor');
     if (isNative(value) && value.kind === 'tensor' && isTensorData(value.data)) {
-        const data = value.data;
-        return { type: 'native', kind: 'tensor', data: { shape: [...data.shape], values: [...data.values] } as NativeTensorData };
+        const data = value.data as NativeTensorData;
+        if (device === undefined || data.device === device) {
+            const host = tensorMaterializeCPU(data, 'Tensor clone');
+            return { type: 'native', kind: 'tensor', data: makeTensorData(host.shape, host.values ?? [], data.device) };
+        }
+        const host = tensorMaterializeCPU(data, 'Tensor transfer');
+        return { type: 'native', kind: 'tensor', data: makeTensorData(host.shape, host.values ?? [], device) };
     }
     if (typeof value === 'number') {
-        return { type: 'native', kind: 'tensor', data: { shape: [1], values: [value] } as NativeTensorData };
+        return { type: 'native', kind: 'tensor', data: makeTensorData([1], [value], device) };
     }
     if (!isList(value)) runtimeError('Tensor(value) expects a number, list, or tensor');
     const data = flattenTensorInput(value);
-    return { type: 'native', kind: 'tensor', data };
+    return { type: 'native', kind: 'tensor', data: makeTensorData(data.shape, data.values, device) };
 }
 
 function tensorDims(shapeValue: Value, context: string): number[] {
@@ -126,14 +135,14 @@ function tensorDims(shapeValue: Value, context: string): number[] {
     return dims;
 }
 
-function makeTensorFromShape(shapeValue: Value, fillValue: Value): AuraNative {
+function makeTensorFromShape(shapeValue: Value, fillValue?: Value, deviceValue?: Value): AuraNative {
     const dims = tensorDims(shapeValue, 'TensorShape');
     const fill = fillValue === undefined ? 0 : asNumber(fillValue, 'TensorShape fill');
     const size = tensorSize(dims);
-    return { type: 'native', kind: 'tensor', data: { shape: dims, values: new Array(size).fill(fill) } as NativeTensorData };
+    return { type: 'native', kind: 'tensor', data: makeTensorData(dims, new Array(size).fill(fill), tensorDeviceArg(deviceValue, 'TensorShape')) };
 }
 
-function makeTensorRandom(shapeValue: Value, minValue: Value, maxValue: Value): AuraNative {
+function makeTensorRandom(shapeValue: Value, minValue?: Value, maxValue?: Value, deviceValue?: Value): AuraNative {
     const dims = tensorDims(shapeValue, 'TensorRand');
     const min = minValue === undefined ? 0 : asNumber(minValue, 'TensorRand min');
     const max = maxValue === undefined ? 1 : asNumber(maxValue, 'TensorRand max');
@@ -142,10 +151,10 @@ function makeTensorRandom(shapeValue: Value, minValue: Value, maxValue: Value): 
     const span = max - min;
     const values = new Array<number>(size);
     for (let i = 0; i < size; i++) values[i] = min + Math.random() * span;
-    return { type: 'native', kind: 'tensor', data: { shape: dims, values } as NativeTensorData };
+    return { type: 'native', kind: 'tensor', data: makeTensorData(dims, values, tensorDeviceArg(deviceValue, 'TensorRand')) };
 }
 
-function makeTensorRandomNormal(shapeValue: Value, meanValue: Value, stdValue: Value): AuraNative {
+function makeTensorRandomNormal(shapeValue: Value, meanValue?: Value, stdValue?: Value, deviceValue?: Value): AuraNative {
     const dims = tensorDims(shapeValue, 'TensorRandn');
     const mean = meanValue === undefined ? 0 : asNumber(meanValue, 'TensorRandn mean');
     const std = stdValue === undefined ? 1 : asNumber(stdValue, 'TensorRandn std');
@@ -162,20 +171,20 @@ function makeTensorRandomNormal(shapeValue: Value, meanValue: Value, stdValue: V
         values[i++] = mean + std * z0;
         if (i < size) values[i++] = mean + std * z1;
     }
-    return { type: 'native', kind: 'tensor', data: { shape: dims, values } as NativeTensorData };
+    return { type: 'native', kind: 'tensor', data: makeTensorData(dims, values, tensorDeviceArg(deviceValue, 'TensorRandn')) };
 }
 
-function makeTensorEye(nValue: Value, mValue: Value): AuraNative {
+function makeTensorEye(nValue: Value, mValue?: Value, deviceValue?: Value): AuraNative {
     const nRaw = asNumber(nValue, 'TensorEye n');
     const n = Math.trunc(nRaw);
     if (n < 0 || n !== nRaw) runtimeError('TensorEye n must be a non-negative integer');
-    const mRaw = mValue === undefined ? n : asNumber(mValue, 'TensorEye m');
+    const mRaw = mValue === undefined || mValue === null ? n : asNumber(mValue, 'TensorEye m');
     const m = Math.trunc(mRaw);
     if (m < 0 || m !== mRaw) runtimeError('TensorEye m must be a non-negative integer');
     const values = new Array<number>(n * m).fill(0);
     const diag = Math.min(n, m);
     for (let i = 0; i < diag; i++) values[i * m + i] = 1;
-    return { type: 'native', kind: 'tensor', data: { shape: [n, m], values } as NativeTensorData };
+    return { type: 'native', kind: 'tensor', data: makeTensorData([n, m], values, tensorDeviceArg(deviceValue, 'TensorEye')) };
 }
 
 function asNumber(v: Value, context: string): number {
@@ -957,7 +966,7 @@ export function makeBuiltins(): Map<string, Value> {
             if (native.kind === 'hashmap' || native.kind === 'tree') return (native.data as Map<string, Value>).size;
             if (native.kind === 'heap') return isHeapData(native.data) ? native.data.items.length : 0;
             if (native.kind === 'indexed') return isIndexedData(native.data) ? native.data.items.length : 0;
-            if (native.kind === 'tensor') return isTensorData(native.data) ? native.data.values.length : 0;
+            if (native.kind === 'tensor') return isTensorData(native.data) ? tensorSize(native.data.shape) : 0;
             if (Array.isArray(native.data)) return native.data.length;
         }
         runtimeError(`len() not supported on ${typeof v}`);
@@ -1057,24 +1066,43 @@ export function makeBuiltins(): Map<string, Value> {
         return makeIndexed(keys);
     }));
     b.set('Tensor', builtin('Tensor', (args) => {
-        if (args.length !== 1) runtimeError('Tensor(value) expects exactly one argument');
-        return makeTensorFromValue(args[0]);
+        if (args.length < 1 || args.length > 2) runtimeError('Tensor(value, device?) expects 1 or 2 arguments');
+        return makeTensorFromValue(args[0], args[1]);
     }));
     b.set('TensorShape', builtin('TensorShape', (args) => {
-        if (args.length < 1 || args.length > 2) runtimeError('TensorShape(shape, fill?) expects 1 or 2 arguments');
-        return makeTensorFromShape(args[0], args[1]);
+        if (args.length < 1 || args.length > 3) runtimeError('TensorShape(shape, fill?, device?) expects 1 to 3 arguments');
+        return makeTensorFromShape(args[0], args[1], args[2]);
     }));
     b.set('TensorRand', builtin('TensorRand', (args) => {
-        if (args.length < 1 || args.length > 3) runtimeError('TensorRand(shape, min?, max?) expects 1 to 3 arguments');
-        return makeTensorRandom(args[0], args[1], args[2]);
+        if (args.length < 1 || args.length > 4) runtimeError('TensorRand(shape, min?, max?, device?) expects 1 to 4 arguments');
+        return makeTensorRandom(args[0], args[1], args[2], args[3]);
     }));
     b.set('TensorRandn', builtin('TensorRandn', (args) => {
-        if (args.length < 1 || args.length > 3) runtimeError('TensorRandn(shape, mean?, std?) expects 1 to 3 arguments');
-        return makeTensorRandomNormal(args[0], args[1], args[2]);
+        if (args.length < 1 || args.length > 4) runtimeError('TensorRandn(shape, mean?, std?, device?) expects 1 to 4 arguments');
+        return makeTensorRandomNormal(args[0], args[1], args[2], args[3]);
     }));
     b.set('TensorEye', builtin('TensorEye', (args) => {
-        if (args.length < 1 || args.length > 2) runtimeError('TensorEye(n, m?) expects 1 or 2 arguments');
-        return makeTensorEye(args[0], args[1]);
+        if (args.length < 1 || args.length > 3) runtimeError('TensorEye(n, m?, device?) expects 1 to 3 arguments');
+        return makeTensorEye(args[0], args[1], args[2]);
+    }));
+    b.set('__tensor_cuda_available', builtin('__tensor_cuda_available', () => cudaAvailable()));
+    b.set('__tensor_device_count', builtin('__tensor_device_count', () => cudaDeviceCount()));
+    b.set('__tensor_default_device', builtin('__tensor_default_device', () => tensorDefaultDevice()));
+    b.set('__tensor_set_default_device', builtin('__tensor_set_default_device', ([device]) => {
+        if (typeof device !== 'string') runtimeError('__tensor_set_default_device(device) expects string');
+        try {
+            return setTensorDefaultDevice(device);
+        } catch (err) {
+            runtimeError((err as Error).message);
+        }
+    }));
+    b.set('__tensor_synchronize', builtin('__tensor_synchronize', () => {
+        try {
+            cudaSynchronize();
+            return null;
+        } catch (err) {
+            runtimeError((err as Error).message);
+        }
     }));
 
     b.set('to_list', builtin('to_list', ([v]) => makeList(toArray(v))));
