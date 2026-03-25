@@ -16,7 +16,7 @@ fn main():
     let data = __char_windows(vocab.encode(tokens), 5)
     let train_loader = loader.data_loader(loader.tensor_dataset(data["X"], data["y"]), 8, true, false, 11)
 
-    let model = nn.sequential([nn.embedding(vocab.size(), 12), nn.lstm(12, 18), nn.linear(18, vocab.size())])
+    let model = nn.Sequential([nn.Embedding(vocab.size(), 12), nn.LSTM(12, 18), nn.Linear(18, vocab.size())])
     let device = "cpu"
     if tensor.cuda_available():
         device = "cuda:0"

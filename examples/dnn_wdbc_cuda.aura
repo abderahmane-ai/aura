@@ -24,7 +24,7 @@ fn main():
     let test = test_tbl.to_tensors(features, "diagnosis")
     let train_loader = loader.data_loader(loader.tensor_dataset(train["X"], train["y"]), 64, true, false, 21)
     let test_loader = loader.data_loader(loader.tensor_dataset(test["X"], test["y"]), 64, false, false, 21)
-    let model = nn.sequential([nn.linear(len(features), 16), nn.relu(), nn.linear(16, 8), nn.relu(), nn.linear(8, 1)])
+    let model = nn.Sequential([nn.Linear(len(features), 16), nn.ReLU(), nn.Linear(16, 8), nn.ReLU(), nn.Linear(8, 1)])
     let fit = trainer.trainer("classification", optim.adam(0.01), nil, nil, {"epochs": 200, "verbose": false, "seed": 21, "device": "cuda:0"})
     fit.fit(model, train_loader)
     let stats = fit.evaluate(model, test_loader)

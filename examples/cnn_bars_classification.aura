@@ -13,7 +13,7 @@ fn main():
     let train_loader = loader.data_loader(loader.tensor_dataset(train["X"], train["y"]), batch_size, true, false, 7)
     let test_loader = loader.data_loader(loader.tensor_dataset(test["X"], test["y"]), batch_size, false, false, 7)
 
-    let model = nn.sequential([nn.conv2d(1, 4, 3, 1, 1), nn.relu(), nn.max_pool2d(2), nn.adaptive_avg_pool2d([1, 1]), nn.flatten(), nn.linear(4, 2)])
+    let model = nn.Sequential([nn.Conv2d(1, 4, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2), nn.AdaptiveAvgPool2d([1, 1]), nn.Flatten(), nn.Linear(4, 2)])
     let device = "cpu"
     if tensor.cuda_available():
         device = "cuda:0"

@@ -21,6 +21,15 @@
     { "open": "\"", "close": "\"" },
     { "open": "'", "close": "'" }
   ],
+  "onEnterRules": [
+    {
+      "beforeText": "^.*\\($",
+      "afterText": "^\\s*\\)",
+      "action": {
+        "indent": "indentOutdent"
+      }
+    }
+  ],
   "folding": {
     "offSide": true
   },

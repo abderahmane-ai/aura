@@ -32,6 +32,13 @@ interface ImportPathInfo {
     pathEnd: number;
 }
 
+interface AuraModuleSymbol {
+    kind: 'fn' | 'class';
+    name: string;
+    line: number;
+    detail: string;
+}
+
 const KEYWORD_DOCS: Record<string, string> = {
     let: 'Declare an immutable binding.',
     var: 'Declare a mutable binding.',
@@ -365,9 +372,11 @@ export function activate(context: any): void {
 
     const definitionProvider = vscode.languages.registerDefinitionProvider({ language: 'aura' }, {
         provideDefinition(document: any, position: any): any {
-            const resolved = resolveImportDefinition(document, position);
-            if (!resolved) return undefined;
-            const uri = vscode.Uri.file(resolved);
+            const resolved = resolveDefinitionLocation(document, position);
+            if (resolved) return resolved;
+            const importPath = resolveImportDefinition(document, position);
+            if (!importPath) return undefined;
+            const uri = vscode.Uri.file(importPath);
             return new vscode.Location(uri, new vscode.Position(0, 0));
         },
     });
@@ -433,6 +442,14 @@ function provideAuraCompletions(document: any, position: any): any[] {
 }
 
 function completionForReceiver(document: any, line: number, receiver: string): any[] {
+    const aliasMap = collectImportAliases(document, line);
+    const modulePath = aliasMap.get(receiver);
+    if (modulePath) {
+        const resolved = resolveAuraImport(document.uri.fsPath, modulePath);
+        if (!resolved) return [];
+        return moduleCompletionItems(resolved);
+    }
+
     if (receiver === 'io') {
         return [
             makeMethodCompletion('println', 'io.println(value)', 'println(${1:value})'),
@@ -557,6 +574,26 @@ function isInsideString(before: string): boolean {
 }
 
 function provideImportHover(document: any, position: any): any {
+    const member = resolveMemberAccess(document, position);
+    if (member) {
+        const target = resolveDefinitionLocation(document, position);
+        if (target) {
+            if (member.part === 'member') {
+                const symbol = findAuraModuleSymbol(target.uri.fsPath, member.member);
+                if (symbol) {
+                    const md = new vscode.MarkdownString(`**${symbol.name}**\n\n${symbol.detail}\n\nResolves to \`${target.uri.fsPath}:${symbol.line + 1}\`.`);
+                    return new vscode.Hover(md, member.range);
+                }
+            } else {
+                const aliasMap = collectImportAliases(document, position.line);
+                const modulePath = aliasMap.get(member.receiver);
+                if (modulePath) {
+                    return new vscode.Hover(new vscode.MarkdownString(`**Module** \`${modulePath}\`\n\nResolves to \`${target.uri.fsPath}\`.`), member.range);
+                }
+            }
+        }
+    }
+
     const lineText = document.lineAt(position.line).text;
     const info = parseImportPathInfo(lineText);
     if (!info) return undefined;
@@ -585,6 +622,55 @@ function resolveImportDefinition(document: any, position: any): string | undefin
     const modulePath = aliasMap.get(word);
     if (!modulePath) return undefined;
     return resolveAuraImport(document.uri.fsPath, modulePath);
+}
+
+function resolveDefinitionLocation(document: any, position: any): any | undefined {
+    const member = resolveMemberAccess(document, position);
+    if (!member) return undefined;
+    const aliasMap = collectImportAliases(document, position.line);
+    const modulePath = aliasMap.get(member.receiver);
+    if (!modulePath) return undefined;
+    const resolved = resolveAuraImport(document.uri.fsPath, modulePath);
+    if (!resolved) return undefined;
+    if (member.part === 'receiver') {
+        return new vscode.Location(vscode.Uri.file(resolved), new vscode.Position(0, 0));
+    }
+    const symbol = findAuraModuleSymbol(resolved, member.member);
+    if (!symbol) return new vscode.Location(vscode.Uri.file(resolved), new vscode.Position(0, 0));
+    return new vscode.Location(vscode.Uri.file(resolved), new vscode.Position(symbol.line, 0));
+}
+
+function resolveMemberAccess(document: any, position: any): { receiver: string; member: string; part: 'receiver' | 'member'; range: any } | undefined {
+    const lineText = document.lineAt(position.line).text;
+    const rx = /([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)/g;
+    let match: RegExpExecArray | null;
+    while ((match = rx.exec(lineText)) !== null) {
+        const fullStart = match.index;
+        const receiver = match[1];
+        const member = match[2];
+        const memberStart = fullStart + receiver.length + 1;
+        const memberEnd = memberStart + member.length;
+        const receiverStart = fullStart;
+        const receiverEnd = receiverStart + receiver.length;
+        const ch = position.character;
+        if (ch >= receiverStart && ch <= receiverEnd) {
+            return {
+                receiver,
+                member,
+                part: 'receiver',
+                range: new vscode.Range(position.line, receiverStart, position.line, receiverEnd),
+            };
+        }
+        if (ch >= memberStart && ch <= memberEnd) {
+            return {
+                receiver,
+                member,
+                part: 'member',
+                range: new vscode.Range(position.line, memberStart, position.line, memberEnd),
+            };
+        }
+    }
+    return undefined;
 }
 
 function buildImportDocumentLinks(document: any): any[] {
@@ -651,6 +737,53 @@ function resolveAuraImport(fromFile: string, modulePath: string): string | undef
         if (fs.existsSync(candidate)) return candidate;
     }
     return undefined;
+}
+
+function moduleCompletionItems(moduleFile: string): any[] {
+    const symbols = listAuraModuleSymbols(moduleFile);
+    return symbols.map((symbol) => {
+        const kind = symbol.kind === 'class'
+            ? vscode.CompletionItemKind.Class
+            : (looksLikeConstructor(symbol.name) ? vscode.CompletionItemKind.Constructor : vscode.CompletionItemKind.Function);
+        const item = new vscode.CompletionItem(symbol.name, kind);
+        item.detail = symbol.detail;
+        item.documentation = new vscode.MarkdownString(symbol.detail);
+        item.sortText = `0_${symbol.kind}_${symbol.name}`;
+        if (symbol.kind === 'fn') {
+            item.insertText = new vscode.SnippetString(`${symbol.name}(${looksLikeConstructor(symbol.name) ? '${1}' : '${1}'})`);
+            item.commitCharacters = ['('];
+        }
+        return item;
+    });
+}
+
+function listAuraModuleSymbols(moduleFile: string): AuraModuleSymbol[] {
+    if (!fs.existsSync(moduleFile)) return [];
+    const lines = fs.readFileSync(moduleFile, 'utf8').split(/\r?\n/);
+    const out: AuraModuleSymbol[] = [];
+    for (let i = 0; i < lines.length; i++) {
+        const text = lines[i];
+        const match = /^\s*(fn|class)\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(text);
+        if (!match) continue;
+        const kind = match[1] as 'fn' | 'class';
+        const name = match[2];
+        if (name.startsWith('__') || name.endsWith('Impl')) continue;
+        out.push({
+            kind,
+            name,
+            line: i,
+            detail: `${kind} ${name}`,
+        });
+    }
+    return out;
+}
+
+function findAuraModuleSymbol(moduleFile: string, symbolName: string): AuraModuleSymbol | undefined {
+    return listAuraModuleSymbols(moduleFile).find((symbol) => symbol.name === symbolName);
+}
+
+function looksLikeConstructor(name: string): boolean {
+    return /^[A-Z]/.test(name);
 }
 
 function findStdlibByWalkingUp(startDir: string, stdRel: string): string | undefined {

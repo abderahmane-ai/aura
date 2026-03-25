@@ -13,7 +13,7 @@ fn main():
     let y = tensor.tensor([0.0, 1.0, 1.0, 0.0])
     let dataset = loader.tensor_dataset(X, y)
     let train_loader = loader.data_loader(dataset, 4, true, false, 7)
-    let model = nn.sequential([nn.linear(2, 8), nn.tanh(), nn.linear(8, 1)])
+    let model = nn.Sequential([nn.Linear(2, 8), nn.Tanh(), nn.Linear(8, 1)])
     let fit = trainer.trainer("classification", optim.adam(0.05), nil, nil, {"epochs": 500, "verbose": false, "seed": 7, "device": "cuda:0"})
     fit.fit(model, train_loader)
     let stats = fit.evaluate(model, train_loader)

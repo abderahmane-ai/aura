@@ -1,0 +1,50 @@
+import std.io as io
+import std.nn as nn
+import std.optim as optim
+import std.data.loader as loader
+import std.data.text as text
+import std.nn.trainer as trainer
+import std.tensor as tensor
+import support.datasets as datasets
+
+fn main():
+    # Keep the example realistically on IMDB while staying runnable in Aura.
+    let train_per_class = 500
+    let test_per_class = 200
+    let max_len = 120
+    let min_freq = 2
+    let batch_size = 32
+
+    let imdb = datasets.imdb_binary_reviews(train_per_class, test_per_class)
+    let tok = text.tokenizer("whitespace", true)
+    let vocab = text.vocab(min_freq)
+
+    let train_tokens = []
+    for sample in imdb["train_texts"]:
+        train_tokens.push(tok.tokenize(sample))
+    vocab.fit(train_tokens)
+
+    let train_ds = text.text_dataset(imdb["train_texts"], imdb["train_labels"], tok, vocab, max_len, false, false)
+    let test_ds = text.text_dataset(imdb["test_texts"], imdb["test_labels"], tok, vocab, max_len, false, false)
+    let train_loader = loader.data_loader(train_ds.to_tensor_dataset(), batch_size, true, false, 1337)
+    let test_loader = loader.data_loader(test_ds.to_tensor_dataset(), batch_size, false, false, 1337)
+
+    let model = nn.Sequential([nn.Embedding(vocab.size(), 64), nn.LSTM(64, 64), nn.Dropout(0.2), nn.Linear(64, 2)])
+
+    let device = "cpu"
+    if tensor.cuda_available():
+        device = "cuda:0"
+
+    let fit = trainer.trainer("classification", optim.adamw(0.001, 0.9, 0.999, 0.00000001, 0.00001), nil, nil, {"epochs": 4, "seed": 1337, "verbose": true, "log_every": 1, "device": device, "restore_best": true, "early_stopping_patience": 2})
+
+    let train_count = len(imdb["train_texts"])
+    let test_count = len(imdb["test_texts"])
+    io.println("imdb lstm train={train_count} test={test_count} vocab={vocab.size()} max_len={max_len} device={device}")
+    fit.fit(model, train_loader, test_loader)
+    let stats = fit.evaluate(model, test_loader)
+    let loss = stats["loss"]
+    let accuracy = stats["accuracy"]
+    let precision = stats["precision"]
+    let recall = stats["recall"]
+    let f1 = stats["f1"]
+    io.println("imdb lstm loss={loss} accuracy={accuracy} precision={precision} recall={recall} f1={f1}")

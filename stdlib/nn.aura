@@ -8,7 +8,7 @@ import std.nn.init as init
 
 let SERIAL_VERSION = 1
 
-class Module:
+class ModuleImpl:
     let kind: String
     var training: Bool
 
@@ -55,7 +55,10 @@ class Module:
     fn save(path: String):
         return save(self, path)
 
-class Parameter:
+fn Module(kind: String = "module"):
+    return ModuleImpl(kind)
+
+class ParameterImpl:
     let kind: String
     let requires_grad: Bool
     var data
@@ -95,10 +98,13 @@ class Parameter:
     fn is_cuda() -> Bool:
         return self.data.is_cuda()
 
+fn Parameter(data, name: String = ""):
+    return ParameterImpl(data, name)
+
 fn parameter(data, name: String = ""):
     return Parameter(data, name)
 
-class Linear:
+class LinearImpl:
     let kind: String
     var training: Bool
     let in_features: Int
@@ -163,10 +169,13 @@ class Linear:
     fn save(path: String):
         return save(self, path)
 
+fn Linear(in_features: Int, out_features: Int, bias: Bool = true, init_name: String = "xavier_uniform"):
+    return LinearImpl(in_features, out_features, bias, init_name)
+
 fn linear(in_features: Int, out_features: Int, bias: Bool = true, init_name: String = "xavier_uniform"):
     return Linear(in_features, out_features, bias, init_name)
 
-class ReLU:
+class ReLUImpl:
     let kind: String
     var training: Bool
 
@@ -215,10 +224,13 @@ class ReLU:
     fn save(path: String):
         return save(self, path)
 
+fn ReLU():
+    return ReLUImpl()
+
 fn relu():
     return ReLU()
 
-class Sigmoid:
+class SigmoidImpl:
     let kind: String
     var training: Bool
 
@@ -267,10 +279,13 @@ class Sigmoid:
     fn save(path: String):
         return save(self, path)
 
+fn Sigmoid():
+    return SigmoidImpl()
+
 fn sigmoid():
     return Sigmoid()
 
-class Tanh:
+class TanhImpl:
     let kind: String
     var training: Bool
 
@@ -319,10 +334,13 @@ class Tanh:
     fn save(path: String):
         return save(self, path)
 
+fn Tanh():
+    return TanhImpl()
+
 fn tanh():
     return Tanh()
 
-class Identity:
+class IdentityImpl:
     let kind: String
     var training: Bool
 
@@ -371,10 +389,13 @@ class Identity:
     fn save(path: String):
         return save(self, path)
 
+fn Identity():
+    return IdentityImpl()
+
 fn identity():
     return Identity()
 
-class Dropout:
+class DropoutImpl:
     let kind: String
     var training: Bool
     let p: Float64
@@ -427,10 +448,13 @@ class Dropout:
     fn save(path: String):
         return save(self, path)
 
+fn Dropout(p: Float64 = 0.5):
+    return DropoutImpl(p)
+
 fn dropout(p: Float64 = 0.5):
     return Dropout(p)
 
-class LayerNorm:
+class LayerNormImpl:
     let kind: String
     var training: Bool
     let features: Int
@@ -493,10 +517,13 @@ class LayerNorm:
     fn save(path: String):
         return save(self, path)
 
+fn LayerNorm(features: Int, eps: Float64 = 0.00001, affine: Bool = true):
+    return LayerNormImpl(features, eps, affine)
+
 fn layer_norm(features: Int, eps: Float64 = 0.00001, affine: Bool = true):
     return LayerNorm(features, eps, affine)
 
-class BatchNorm1d:
+class BatchNorm1dImpl:
     let kind: String
     var training: Bool
     let features: Int
@@ -567,10 +594,13 @@ class BatchNorm1d:
     fn save(path: String):
         return save(self, path)
 
+fn BatchNorm1d(features: Int, eps: Float64 = 0.00001, momentum: Float64 = 0.1, affine: Bool = true, track_running_stats: Bool = true):
+    return BatchNorm1dImpl(features, eps, momentum, affine, track_running_stats)
+
 fn batch_norm1d(features: Int, eps: Float64 = 0.00001, momentum: Float64 = 0.1, affine: Bool = true, track_running_stats: Bool = true):
     return BatchNorm1d(features, eps, momentum, affine, track_running_stats)
 
-class Flatten:
+class FlattenImpl:
     let kind: String
     var training: Bool
     let start_dim: Int
@@ -648,10 +678,13 @@ class Flatten:
     fn save(path: String):
         return save(self, path)
 
+fn Flatten(start_dim: Int = 1, end_dim: Int = -1):
+    return FlattenImpl(start_dim, end_dim)
+
 fn flatten(start_dim: Int = 1, end_dim: Int = -1):
     return Flatten(start_dim, end_dim)
 
-class Conv2d:
+class Conv2dImpl:
     let kind: String
     var training: Bool
     let in_channels: Int
@@ -722,10 +755,13 @@ class Conv2d:
     fn save(path: String):
         return save(self, path)
 
+fn Conv2d(in_channels: Int, out_channels: Int, kernel_size, stride = 1, padding = 0, dilation = 1, bias: Bool = true):
+    return Conv2dImpl(in_channels, out_channels, kernel_size, stride, padding, dilation, bias)
+
 fn conv2d(in_channels: Int, out_channels: Int, kernel_size, stride = 1, padding = 0, dilation = 1, bias: Bool = true):
     return Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias)
 
-class AvgPool2d:
+class AvgPool2dImpl:
     let kind: String
     var training: Bool
     let kernel_size
@@ -783,10 +819,13 @@ class AvgPool2d:
     fn save(path: String):
         return save(self, path)
 
+fn AvgPool2d(kernel_size, stride = nil, padding = 0):
+    return AvgPool2dImpl(kernel_size, stride, padding)
+
 fn avg_pool2d(kernel_size, stride = nil, padding = 0):
     return AvgPool2d(kernel_size, stride, padding)
 
-class MaxPool2d:
+class MaxPool2dImpl:
     let kind: String
     var training: Bool
     let kernel_size
@@ -844,10 +883,13 @@ class MaxPool2d:
     fn save(path: String):
         return save(self, path)
 
+fn MaxPool2d(kernel_size, stride = nil, padding = 0):
+    return MaxPool2dImpl(kernel_size, stride, padding)
+
 fn max_pool2d(kernel_size, stride = nil, padding = 0):
     return MaxPool2d(kernel_size, stride, padding)
 
-class AdaptiveAvgPool2d:
+class AdaptiveAvgPool2dImpl:
     let kind: String
     var training: Bool
     let output_size
@@ -898,10 +940,13 @@ class AdaptiveAvgPool2d:
     fn save(path: String):
         return save(self, path)
 
+fn AdaptiveAvgPool2d(output_size):
+    return AdaptiveAvgPool2dImpl(output_size)
+
 fn adaptive_avg_pool2d(output_size):
     return AdaptiveAvgPool2d(output_size)
 
-class Embedding:
+class EmbeddingImpl:
     let kind: String
     var training: Bool
     let num_embeddings: Int
@@ -957,10 +1002,13 @@ class Embedding:
     fn save(path: String):
         return save(self, path)
 
+fn Embedding(num_embeddings: Int, embedding_dim: Int):
+    return EmbeddingImpl(num_embeddings, embedding_dim)
+
 fn embedding(num_embeddings: Int, embedding_dim: Int):
     return Embedding(num_embeddings, embedding_dim)
 
-class RNN:
+class RNNImpl:
     let kind: String
     var training: Bool
     let input_size: Int
@@ -1055,10 +1103,13 @@ class RNN:
     fn save(path: String):
         return save(self, path)
 
+fn RNN(input_size: Int, hidden_size: Int, bias: Bool = true):
+    return RNNImpl(input_size, hidden_size, bias)
+
 fn rnn(input_size: Int, hidden_size: Int, bias: Bool = true):
     return RNN(input_size, hidden_size, bias)
 
-class GRU:
+class GRUImpl:
     let kind: String
     var training: Bool
     let input_size: Int
@@ -1184,10 +1235,13 @@ class GRU:
     fn save(path: String):
         return save(self, path)
 
+fn GRU(input_size: Int, hidden_size: Int, bias: Bool = true):
+    return GRUImpl(input_size, hidden_size, bias)
+
 fn gru(input_size: Int, hidden_size: Int, bias: Bool = true):
     return GRU(input_size, hidden_size, bias)
 
-class LSTM:
+class LSTMImpl:
     let kind: String
     var training: Bool
     let input_size: Int
@@ -1326,10 +1380,13 @@ class LSTM:
     fn save(path: String):
         return save(self, path)
 
+fn LSTM(input_size: Int, hidden_size: Int, bias: Bool = true):
+    return LSTMImpl(input_size, hidden_size, bias)
+
 fn lstm(input_size: Int, hidden_size: Int, bias: Bool = true):
     return LSTM(input_size, hidden_size, bias)
 
-class Sequential:
+class SequentialImpl:
     let kind: String
     var training: Bool
     let modules
@@ -1381,10 +1438,13 @@ class Sequential:
     fn save(path: String):
         return save(self, path)
 
+fn Sequential(modules):
+    return SequentialImpl(modules)
+
 fn sequential(modules):
     return Sequential(modules)
 
-class Residual:
+class ResidualImpl:
     let kind: String
     var training: Bool
     let block
@@ -1427,6 +1487,9 @@ class Residual:
 
     fn save(path: String):
         return save(self, path)
+
+fn Residual(block):
+    return ResidualImpl(block)
 
 fn residual(block):
     return Residual(block)

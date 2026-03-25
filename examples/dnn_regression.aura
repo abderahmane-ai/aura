@@ -21,7 +21,7 @@ fn main():
     let data = build_data()
     let dataset = loader.tensor_dataset(data["X"], data["y"])
     let train_loader = loader.data_loader(dataset, 16, true, false, 11)
-    let model = nn.sequential([nn.linear(2, 8), nn.tanh(), nn.linear(8, 1)])
+    let model = nn.Sequential([nn.Linear(2, 8), nn.Tanh(), nn.Linear(8, 1)])
     let fit = trainer.trainer("regression", optim.adam(0.03), nil, nil, {"epochs": 300, "verbose": false, "seed": 11})
     fit.fit(model, train_loader)
     let stats = fit.evaluate(model, train_loader)

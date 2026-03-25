@@ -14,7 +14,7 @@ fn main():
     let train_loader = loader.data_loader(train_ds, 32, true, false, 42)
     let test_loader = loader.data_loader(test_ds, 32, false, false, 42)
 
-    let model = nn.sequential([nn.linear(2, 16), nn.relu(), nn.linear(16, 3)])
+    let model = nn.Sequential([nn.Linear(2, 16), nn.ReLU(), nn.Linear(16, 3)])
     let fit = trainer.trainer("classification", optim.adam(0.03), nil, nil, {"epochs": 200, "verbose": false, "seed": 42})
     fit.fit(model, train_loader)
     let stats = fit.evaluate(model, test_loader)

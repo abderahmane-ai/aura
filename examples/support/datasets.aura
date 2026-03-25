@@ -45,3 +45,59 @@ fn adult_table():
                 next.push(value)
         rows.push(next)
     return table.from_rows(parsed.columns, rows, parsed.types, parsed.meta)
+
+fn imdb_root():
+    let cwd = fs.cwd()
+    let direct = fs.join([cwd, "data", "imdb", "aclImdb"])
+    if fs.exists(direct):
+        return direct
+    let parent = fs.join([fs.dirname(cwd), "data", "imdb", "aclImdb"])
+    if fs.exists(parent):
+        return parent
+    panic("dataset 'imdb/aclImdb' not found in data/imdb/")
+
+fn imdb_binary_reviews(train_per_class: Int = 500, test_per_class: Int = 200):
+    if train_per_class <= 0 or test_per_class <= 0:
+        panic("imdb_binary_reviews expects positive per-class limits")
+    let root = imdb_root()
+    let train_pos = __imdb_reviews(root, "train", "pos", train_per_class)
+    let train_neg = __imdb_reviews(root, "train", "neg", train_per_class)
+    let test_pos = __imdb_reviews(root, "test", "pos", test_per_class)
+    let test_neg = __imdb_reviews(root, "test", "neg", test_per_class)
+
+    let train_texts = []
+    let train_labels = []
+    let test_texts = []
+    let test_labels = []
+
+    for review in train_pos:
+        train_texts.push(review)
+        train_labels.push(1.0)
+    for review in train_neg:
+        train_texts.push(review)
+        train_labels.push(0.0)
+    for review in test_pos:
+        test_texts.push(review)
+        test_labels.push(1.0)
+    for review in test_neg:
+        test_texts.push(review)
+        test_labels.push(0.0)
+
+    return {"train_texts": train_texts, "train_labels": train_labels, "test_texts": test_texts, "test_labels": test_labels}
+
+fn __imdb_reviews(root: String, split: String, sentiment: String, limit: Int):
+    let dir = fs.join([root, split, sentiment])
+    if not fs.exists(dir):
+        panic("imdb review directory missing: {dir}")
+    let files = sort(fs.list_files(dir, false))
+    let out = []
+    var i = 0
+    while i < len(files) and len(out) < limit:
+        let path = fs.join([dir, files[i]])
+        let review = fs.read_text(path).replace("<br />", " ").replace("\n", " ").replace("\r", " ").trim()
+        if review != "":
+            out.push(review)
+        i += 1
+    if len(out) < limit:
+        panic("imdb review directory '{dir}' only yielded {len(out)} items")
+    return out

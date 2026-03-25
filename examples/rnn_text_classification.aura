@@ -26,7 +26,7 @@ fn main():
     let train_loader = loader.data_loader(train_ds.to_tensor_dataset(), 4, true, false, 9)
     let test_loader = loader.data_loader(test_ds.to_tensor_dataset(), 4, false, false, 9)
 
-    let model = nn.sequential([nn.embedding(vocab.size(), 12), nn.gru(12, 16), nn.linear(16, 2)])
+    let model = nn.Sequential([nn.Embedding(vocab.size(), 12), nn.GRU(12, 16), nn.Linear(16, 2)])
     let device = "cpu"
     if tensor.cuda_available():
         device = "cuda:0"

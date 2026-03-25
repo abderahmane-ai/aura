@@ -55,7 +55,7 @@ fn main():
     if tensor.cuda_available():
         device = "cuda:0"
 
-    let model = nn.sequential([nn.linear(len(features), 128, true, "he_uniform"), nn.batch_norm1d(128), nn.relu(), nn.dropout(0.2), nn.linear(128, 64, true, "he_uniform"), nn.batch_norm1d(64), nn.relu(), nn.dropout(0.2), nn.linear(64, 32, true, "he_uniform"), nn.batch_norm1d(32), nn.relu(), nn.dropout(0.1), nn.linear(32, 1, true, "xavier_uniform")])
+    let model = nn.Sequential([nn.Linear(len(features), 128, true, "he_uniform"), nn.BatchNorm1d(128), nn.ReLU(), nn.Dropout(0.2), nn.Linear(128, 64, true, "he_uniform"), nn.BatchNorm1d(64), nn.ReLU(), nn.Dropout(0.2), nn.Linear(64, 32, true, "he_uniform"), nn.BatchNorm1d(32), nn.ReLU(), nn.Dropout(0.1), nn.Linear(32, 1, true, "xavier_uniform")])
 
     let fit = trainer.trainer("classification", optim.adamw(0.001, 0.9, 0.999, 0.00000001, 0.0001), nil, nil, {"epochs": 10, "batch_size": batch_size, "verbose": true, "log_every": 2, "seed": 1337, "device": device, "restore_best": true, "early_stopping_patience": 3})
 

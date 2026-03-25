@@ -8,7 +8,7 @@ import std.data.text as text
 import std.fs as fs
 
 fn main():
-    let cnn = nn.sequential([nn.conv2d(1, 4, 3, 1, 1), nn.relu(), nn.max_pool2d(2), nn.adaptive_avg_pool2d([1, 1]), nn.flatten(), nn.linear(4, 2)])
+    let cnn = nn.Sequential([nn.Conv2d(1, 4, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2), nn.AdaptiveAvgPool2d([1, 1]), nn.Flatten(), nn.Linear(4, 2)])
     let image = tensor.tensor([[[[0.0, 1.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]]]])
     let cnn_out = cnn.forward(image)
     test.assert_equal(cnn_out.data.shape()[0], 1)
@@ -17,18 +17,18 @@ fn main():
     let tok = text.tokenizer()
     let vocab = text.vocab()
     vocab.fit([tok.tokenize("good aura"), tok.tokenize("bad bug")])
-    let embed = nn.embedding(vocab.size(), 6)
+    let embed = nn.Embedding(vocab.size(), 6)
     let embed_out = embed.forward(tensor.tensor([[float(vocab.token_to_id("good")), float(vocab.token_to_id("aura"))]]))
     test.assert_equal(embed_out.data.shape()[0], 1)
     test.assert_equal(embed_out.data.shape()[1], 2)
     test.assert_equal(embed_out.data.shape()[2], 6)
 
-    let gru = nn.gru(6, 8)
+    let gru = nn.GRU(6, 8)
     let gru_out = gru.forward(embed_out)
     test.assert_equal(gru_out.data.shape()[0], 1)
     test.assert_equal(gru_out.data.shape()[1], 8)
 
-    let lstm = nn.lstm(6, 8)
+    let lstm = nn.LSTM(6, 8)
     let lstm_state = lstm.run_sequence(embed_out)
     test.assert_equal(lstm_state["hidden"].data.shape()[1], 8)
     test.assert_equal(lstm_state["cell"].data.shape()[1], 8)
@@ -40,7 +40,7 @@ fn main():
     let stats = fit.evaluate(cnn, train_loader)
     test.assert_true(stats["accuracy"] >= 0.8)
 
-    let seq_model = nn.sequential([nn.embedding(vocab.size(), 6), nn.gru(6, 8), nn.linear(8, 2)])
+    let seq_model = nn.Sequential([nn.Embedding(vocab.size(), 6), nn.GRU(6, 8), nn.Linear(8, 2)])
     let text_x = tensor.tensor([[float(vocab.token_to_id("good")), float(vocab.token_to_id("aura"))], [float(vocab.token_to_id("bad")), float(vocab.token_to_id("bug"))]])
     let text_y = tensor.tensor([1.0, 0.0])
     let text_loader = loader.data_loader(loader.tensor_dataset(text_x, text_y), 2, true, false, 4)

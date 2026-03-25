@@ -25,6 +25,7 @@ editor/vscode/.npm-cache/
 debug.log
 **/roguelike_save.json
 tests/_tmp_conformance/
+data/imdb/
 
 # IDE/editor
 .idea/
