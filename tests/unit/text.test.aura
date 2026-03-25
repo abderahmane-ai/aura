@@ -1,0 +1,18 @@
+import std.test as test
+import std.data.text as text
+
+fn main():
+    let tok = text.tokenizer("whitespace", true)
+    let tokens = tok.tokenize("Hello aura hello")
+    test.assert_equal(tokens[0], "hello")
+    test.assert_equal(tokens[1], "aura")
+
+    let vocab = text.vocab()
+    vocab.fit([tokens, ["aura", "builds"]])
+    test.assert_true(vocab.size() >= 6)
+    test.assert_equal(vocab.decode(vocab.encode(["aura"], false, false))[0], "aura")
+
+    let packed = text.pad_sequences([[1, 2, 3], [4]], 0, 4)
+    test.assert_equal(packed["input_ids"].shape()[0], 2)
+    test.assert_equal(packed["input_ids"].shape()[1], 4)
+    test.assert_equal(packed["mask"].to_list()[1][1], 0)

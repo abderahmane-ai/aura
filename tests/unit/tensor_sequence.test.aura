@@ -1,0 +1,35 @@
+import std.test as test
+import std.tensor as tensor
+
+fn main():
+    let x = tensor.tensor([[[1.0, 2.0], [3.0, 4.0]]])
+    let p = tensor.permute(x, [1, 0, 2])
+    test.assert_equal(p.shape()[0], 2)
+    test.assert_equal(p.shape()[1], 1)
+    test.assert_equal(p.to_list()[1][0][1], 4)
+
+    let a = tensor.tensor([[1.0, 2.0]])
+    let b = tensor.tensor([[3.0, 4.0]])
+    let cat = tensor.concat([a, b], 0)
+    test.assert_equal(cat.shape()[0], 2)
+    test.assert_equal(cat.to_list()[1][0], 3)
+
+    let stacked = tensor.stack([a, b], 0)
+    test.assert_equal(stacked.shape()[0], 2)
+    test.assert_equal(stacked.shape()[1], 1)
+
+    let padded = tensor.pad(tensor.tensor([[1.0, 2.0], [3.0, 4.0]]), [[1, 1], [2, 0]], 0.0)
+    test.assert_equal(padded.shape()[0], 4)
+    test.assert_equal(padded.shape()[1], 4)
+    test.assert_equal(padded.to_list()[1][2], 1)
+
+    let picked = tensor.index_select(tensor.tensor([[10.0, 11.0], [20.0, 21.0], [30.0, 31.0]]), 0, [2, 0])
+    test.assert_equal(picked.shape()[0], 2)
+    test.assert_equal(picked.to_list()[0][0], 30)
+
+    let pieces = tensor.split(tensor.tensor([[1.0], [2.0], [3.0], [4.0], [5.0]]), 2, 0)
+    test.assert_equal(len(pieces), 3)
+    test.assert_equal(pieces[2].shape()[0], 1)
+
+    let chunks = tensor.chunk(tensor.tensor([[1.0], [2.0], [3.0], [4.0], [5.0]]), 2, 0)
+    test.assert_equal(len(chunks), 2)

@@ -270,15 +270,27 @@ fn select_timestep(v, step: Int):
     let actual = step
     if actual < 0 or actual >= steps:
         panic("autograd.select_timestep step out of range")
-    let out = tensor.zeros([batch, features], value.data.device())
+    let out = __select_timestep_forward(value.data, actual)
+    return Variable(out, value.requires_grad, [value], "select_timestep", {"shape": shape, "step": actual}, nil)
+
+fn __select_timestep_forward(x, step: Int):
+    if x.is_cuda():
+        return __select_timestep_forward_cpu(x.cpu(), step).to(x.device())
+    return __select_timestep_forward_cpu(x, step)
+
+fn __select_timestep_forward_cpu(x, step: Int):
+    let shape = x.shape()
+    let batch = shape[0]
+    let features = shape[2]
+    let out = tensor.zeros([batch, features], x.device())
     var b = 0
     while b < batch:
         var f = 0
         while f < features:
-            out.set_at(b, f, float(value.data.at(b, actual, f)))
+            out.set_at(b, f, float(x.at(b, step, f)))
             f += 1
         b += 1
-    return Variable(out, value.requires_grad, [value], "select_timestep", {"shape": shape, "step": actual}, nil)
+    return out
 
 fn embedding(weight, indices):
     let table = __ensure_variable(weight)
@@ -293,13 +305,18 @@ fn embedding(weight, indices):
         if token < 0 or token >= table.data.shape()[0]:
             panic("autograd.embedding index out of range")
         ids.push(token)
-    let gathered = table.data.take_rows(ids)
+    let gathered = __embedding_forward(table.data, ids)
     let out_shape = []
     for dim in idx.shape():
         out_shape.push(dim)
     out_shape.push(table.data.shape()[1])
     let out = gathered.reshape(out_shape)
     return Variable(out, table.requires_grad, [table], "embedding", {"indices": ids, "index_shape": idx.shape(), "weight_shape": table.data.shape()}, nil)
+
+fn __embedding_forward(table, ids):
+    if table.is_cuda():
+        return table.cpu().take_rows(ids).to(table.device())
+    return table.take_rows(ids)
 
 fn conv2d(input, weight, bias = nil, stride = 1, padding = 0, dilation = 1):
     let x = __ensure_variable(input)
@@ -308,7 +325,10 @@ fn conv2d(input, weight, bias = nil, stride = 1, padding = 0, dilation = 1):
     if bias != nil:
         b = __ensure_variable_on(bias, x.data.device())
     let config = __conv2d_config(x.data.shape(), w.data.shape(), stride, padding, dilation)
-    let out = __conv2d_forward(x.data, w.data, b, config)
+    let bias_data = nil
+    if b != nil:
+        bias_data = b.data
+    let out = __conv2d_forward(x.data, w.data, bias_data, config)
     let parents = [x, w]
     let requires_grad = x.requires_grad or w.requires_grad or (b != nil and b.requires_grad)
     if b != nil:
@@ -600,32 +620,14 @@ fn __dispatch_backward(node):
         if parent.requires_grad:
             let shape = node.ctx["shape"]
             let step = node.ctx["step"]
-            let grad_in = tensor.zeros(shape, parent.data.device())
-            let grad_out = node.grad
-            var b = 0
-            while b < shape[0]:
-                var f = 0
-                while f < shape[2]:
-                    grad_in.set_at(b, step, f, float(grad_out.at(b, f)))
-                    f += 1
-                b += 1
+            let grad_in = __select_timestep_backward(node.grad, shape, step, parent.data.device())
             __accumulate_grad(parent, grad_in)
         return
 
     if node.op == "embedding":
         let parent = node.parents[0]
         if parent.requires_grad:
-            let grad_in = tensor.zeros(node.ctx["weight_shape"], parent.data.device())
-            let grad_rows = node.grad.reshape([len(node.ctx["indices"]), node.ctx["weight_shape"][1]])
-            var i = 0
-            while i < len(node.ctx["indices"]):
-                let token = node.ctx["indices"][i]
-                var d = 0
-                while d < node.ctx["weight_shape"][1]:
-                    let next = float(grad_in.at(token, d)) + float(grad_rows.at(i, d))
-                    grad_in.set_at(token, d, next)
-                    d += 1
-                i += 1
+            let grad_in = __embedding_backward(node.grad, node.ctx["weight_shape"], node.ctx["indices"], parent.data.device())
             __accumulate_grad(parent, grad_in)
         return
 
@@ -832,6 +834,15 @@ fn __conv2d_config(input_shape, weight_shape, stride, padding, dilation):
     return {"stride": stride_pair, "padding": pad_pair, "dilation": dil_pair, "out_shape": [input_shape[0], weight_shape[0], out_h, out_w]}
 
 fn __conv2d_forward(x, w, b, config):
+    if x.is_cuda() or w.is_cuda() or (b != nil and b.is_cuda()):
+        let device = x.device()
+        let bias_cpu = nil
+        if b != nil:
+            bias_cpu = b.cpu()
+        return __conv2d_forward_cpu(x.cpu(), w.cpu(), bias_cpu, config).to(device)
+    return __conv2d_forward_cpu(x, w, b, config)
+
+fn __conv2d_forward_cpu(x, w, b, config):
     let out_shape = config["out_shape"]
     let stride = config["stride"]
     let padding = config["padding"]
@@ -847,7 +858,7 @@ fn __conv2d_forward(x, w, b, config):
                 while ox < out_shape[3]:
                     var sum = 0.0
                     if b != nil:
-                        sum = float(b.data.at(co))
+                        sum = float(b.at(co))
                     var ci = 0
                     while ci < w.shape()[1]:
                         var ky = 0
@@ -860,7 +871,6 @@ fn __conv2d_forward(x, w, b, config):
                                     if in_x >= 0 and in_x < x.shape()[3]:
                                         sum += float(x.at(n, ci, in_y, in_x)) * float(w.at(co, ci, ky, kx))
                                     kx += 1
-                                ci += 0
                             ky += 1
                         ci += 1
                     out.set_at(n, co, oy, ox, sum)
@@ -883,15 +893,45 @@ fn __conv2d_backward(node):
     let padding = node.ctx["config"]["padding"]
     let dilation = node.ctx["config"]["dilation"]
 
+    let grads = __conv2d_backward_values(grad_out, x, w, stride, padding, dilation, x_parent.requires_grad, w_parent.requires_grad, b_parent != nil and b_parent.requires_grad)
+    let grad_x = grads["grad_x"]
+    let grad_w = grads["grad_w"]
+    let grad_b = grads["grad_b"]
+    if grad_x != nil:
+        __accumulate_grad(x_parent, grad_x)
+    if grad_w != nil:
+        __accumulate_grad(w_parent, grad_w)
+    if grad_b != nil:
+        __accumulate_grad(b_parent, grad_b)
+
+fn __conv2d_backward_values(grad_out, x, w, stride, padding, dilation, need_x: Bool, need_w: Bool, need_b: Bool):
+    if grad_out.is_cuda() or x.is_cuda() or w.is_cuda():
+        let grad_cpu = grad_out.cpu()
+        let x_cpu = x.cpu()
+        let w_cpu = w.cpu()
+        let grads = __conv2d_backward_values_cpu(grad_cpu, x_cpu, w_cpu, stride, padding, dilation, need_x, need_w, need_b)
+        let grad_x = grads["grad_x"]
+        let grad_w = grads["grad_w"]
+        let grad_b = grads["grad_b"]
+        if grad_x != nil:
+            grad_x = grad_x.to(grad_out.device())
+        if grad_w != nil:
+            grad_w = grad_w.to(grad_out.device())
+        if grad_b != nil:
+            grad_b = grad_b.to(grad_out.device())
+        return {"grad_x": grad_x, "grad_w": grad_w, "grad_b": grad_b}
+    return __conv2d_backward_values_cpu(grad_out, x, w, stride, padding, dilation, need_x, need_w, need_b)
+
+fn __conv2d_backward_values_cpu(grad_out, x, w, stride, padding, dilation, need_x: Bool, need_w: Bool, need_b: Bool):
     var grad_x = nil
     var grad_w = nil
     var grad_b = nil
-    if x_parent.requires_grad:
-        grad_x = tensor.zeros(x.shape(), x_parent.data.device())
-    if w_parent.requires_grad:
-        grad_w = tensor.zeros(w.shape(), w_parent.data.device())
-    if b_parent != nil and b_parent.requires_grad:
-        grad_b = tensor.zeros([w.shape()[0]], b_parent.data.device())
+    if need_x:
+        grad_x = tensor.zeros(x.shape(), x.device())
+    if need_w:
+        grad_w = tensor.zeros(w.shape(), w.device())
+    if need_b:
+        grad_b = tensor.zeros([w.shape()[0]], grad_out.device())
 
     var n = 0
     while n < grad_out.shape()[0]:
@@ -928,12 +968,7 @@ fn __conv2d_backward(node):
                 oy += 1
             co += 1
         n += 1
-    if grad_x != nil:
-        __accumulate_grad(x_parent, grad_x)
-    if grad_w != nil:
-        __accumulate_grad(w_parent, grad_w)
-    if grad_b != nil:
-        __accumulate_grad(b_parent, grad_b)
+    return {"grad_x": grad_x, "grad_w": grad_w, "grad_b": grad_b}
 
 fn __pool2d_config(input_shape, kernel_size, stride, padding):
     if len(input_shape) != 4:
@@ -952,6 +987,11 @@ fn __pool2d_config(input_shape, kernel_size, stride, padding):
     return {"kernel": kernel, "stride": actual_stride, "padding": pad, "out_shape": [input_shape[0], input_shape[1], out_h, out_w]}
 
 fn __avg_pool2d_forward(x, config):
+    if x.is_cuda():
+        return __avg_pool2d_forward_cpu(x.cpu(), config).to(x.device())
+    return __avg_pool2d_forward_cpu(x, config)
+
+fn __avg_pool2d_forward_cpu(x, config):
     let kernel = config["kernel"]
     let stride = config["stride"]
     let padding = config["padding"]
@@ -986,6 +1026,11 @@ fn __avg_pool2d_forward(x, config):
     return out
 
 fn __avg_pool2d_backward(grad_out, input_shape, config):
+    if grad_out.is_cuda():
+        return __avg_pool2d_backward_cpu(grad_out.cpu(), input_shape, config).to(grad_out.device())
+    return __avg_pool2d_backward_cpu(grad_out, input_shape, config)
+
+fn __avg_pool2d_backward_cpu(grad_out, input_shape, config):
     let kernel = config["kernel"]
     let stride = config["stride"]
     let padding = config["padding"]
@@ -1019,6 +1064,12 @@ fn __avg_pool2d_backward(grad_out, input_shape, config):
     return grad_in
 
 fn __max_pool2d_forward(x, config):
+    if x.is_cuda():
+        let result = __max_pool2d_forward_cpu(x.cpu(), config)
+        return {"output": result["output"].to(x.device()), "indices": result["indices"]}
+    return __max_pool2d_forward_cpu(x, config)
+
+fn __max_pool2d_forward_cpu(x, config):
     let kernel = config["kernel"]
     let stride = config["stride"]
     let padding = config["padding"]
@@ -1069,6 +1120,11 @@ fn __max_pool2d_backward(grad_out, input_shape, indices, device: String):
     return grad_in
 
 fn __adaptive_avg_pool2d_forward(x, output_size):
+    if x.is_cuda():
+        return __adaptive_avg_pool2d_forward_cpu(x.cpu(), output_size).to(x.device())
+    return __adaptive_avg_pool2d_forward_cpu(x, output_size)
+
+fn __adaptive_avg_pool2d_forward_cpu(x, output_size):
     let out_h = output_size[0]
     let out_w = output_size[1]
     let shape = x.shape()
@@ -1102,6 +1158,11 @@ fn __adaptive_avg_pool2d_forward(x, output_size):
     return out
 
 fn __adaptive_avg_pool2d_backward(grad_out, input_shape, output_size):
+    if grad_out.is_cuda():
+        return __adaptive_avg_pool2d_backward_cpu(grad_out.cpu(), input_shape, output_size).to(grad_out.device())
+    return __adaptive_avg_pool2d_backward_cpu(grad_out, input_shape, output_size)
+
+fn __adaptive_avg_pool2d_backward_cpu(grad_out, input_shape, output_size):
     let out_h = output_size[0]
     let out_w = output_size[1]
     let grad_in = tensor.zeros(input_shape, grad_out.device())
@@ -1163,6 +1224,8 @@ fn __same_shape(a, b):
 fn __ensure_variable(value):
     if __type_of(value) == "instance" and value.kind == "variable":
         return value
+    if __type_of(value) == "instance" and value.kind == "parameter":
+        return value.variable()
     return variable(value, false)
 
 fn __ensure_variable_on(value, device: String):
@@ -1171,6 +1234,41 @@ fn __ensure_variable_on(value, device: String):
     if __type_of(value) == "instance" and value.kind == "parameter":
         return value.variable()
     return variable(__as_tensor(value, device), false)
+
+fn __select_timestep_backward(grad_out, shape, step: Int, device: String):
+    if grad_out.is_cuda():
+        return __select_timestep_backward_cpu(grad_out.cpu(), shape, step).to(device)
+    return __select_timestep_backward_cpu(grad_out, shape, step)
+
+fn __select_timestep_backward_cpu(grad_out, shape, step: Int):
+    let grad_in = tensor.zeros(shape, grad_out.device())
+    var b = 0
+    while b < shape[0]:
+        var f = 0
+        while f < shape[2]:
+            grad_in.set_at(b, step, f, float(grad_out.at(b, f)))
+            f += 1
+        b += 1
+    return grad_in
+
+fn __embedding_backward(grad_out, weight_shape, indices, device: String):
+    if grad_out.is_cuda():
+        return __embedding_backward_cpu(grad_out.cpu(), weight_shape, indices).to(device)
+    return __embedding_backward_cpu(grad_out, weight_shape, indices)
+
+fn __embedding_backward_cpu(grad_out, weight_shape, indices):
+    let grad_in = tensor.zeros(weight_shape, grad_out.device())
+    let grad_rows = grad_out.reshape([len(indices), weight_shape[1]])
+    var i = 0
+    while i < len(indices):
+        let token = indices[i]
+        var d = 0
+        while d < weight_shape[1]:
+            let next = float(grad_in.at(token, d)) + float(grad_rows.at(i, d))
+            grad_in.set_at(token, d, next)
+            d += 1
+        i += 1
+    return grad_in
 
 fn __as_tensor(value, device = nil):
     if __type_of(value) == "instance" and value.kind == "variable":

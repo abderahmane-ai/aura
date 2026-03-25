@@ -287,7 +287,7 @@ fn __is_builtin_model(model) -> Bool:
     if __type_of(model) != "instance":
         return false
     let kind = model.kind
-    return kind == "linear" or kind == "relu" or kind == "sigmoid" or kind == "tanh" or kind == "identity" or kind == "dropout" or kind == "layer_norm" or kind == "batch_norm1d" or kind == "sequential" or kind == "residual"
+    return kind == "linear" or kind == "conv2d" or kind == "embedding" or kind == "relu" or kind == "sigmoid" or kind == "tanh" or kind == "identity" or kind == "dropout" or kind == "flatten" or kind == "layer_norm" or kind == "batch_norm1d" or kind == "avg_pool2d" or kind == "max_pool2d" or kind == "adaptive_avg_pool2d" or kind == "rnn" or kind == "gru" or kind == "lstm" or kind == "sequential" or kind == "residual"
 
 fn __serialize_value(value):
     let tag = __type_of(value)

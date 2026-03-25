@@ -621,6 +621,25 @@ int NormalizeAxis(int axis, int rank) {
   return resolved;
 }
 
+size_t LinearOffset(const std::vector<int64_t>& shape, const std::vector<int64_t>& indices, const char* context) {
+  if (shape.size() != indices.size()) {
+    throw std::runtime_error(std::string(context) + " expected " + std::to_string(shape.size()) + " indices");
+  }
+  size_t offset = 0;
+  size_t stride = 1;
+  for (int i = static_cast<int>(shape.size()) - 1; i >= 0; --i) {
+    int64_t idx = indices[static_cast<size_t>(i)];
+    int64_t dim = shape[static_cast<size_t>(i)];
+    if (idx < 0) idx += dim;
+    if (idx < 0 || idx >= dim) {
+      throw std::runtime_error(std::string(context) + " index out of range");
+    }
+    offset += static_cast<size_t>(idx) * stride;
+    stride *= static_cast<size_t>(dim);
+  }
+  return offset;
+}
+
 bool CopyDeviceToDevice(napi_env env, DeviceTensor* dst, const DeviceTensor* src) {
   if (dst->size != src->size) {
     ThrowError(env, "device-to-device copy shape mismatch");
@@ -859,6 +878,26 @@ napi_value RunTensorOp(napi_env env, napi_callback_info info) {
       return MakeNumber(env, value);
     }
 
+    if (op == "at") {
+      DeviceTensor* a = ParseCudaTensorArg(env, args.at(0));
+      if (!a) return nullptr;
+      std::vector<int64_t> indices;
+      indices.reserve(args.size() - 1);
+      for (size_t i = 1; i < args.size(); ++i) {
+        indices.push_back(static_cast<int64_t>(std::llround(GetNumber(env, args.at(i)))));
+      }
+      size_t offset = 0;
+      try {
+        offset = LinearOffset(a->shape, indices, "tensor.at");
+      } catch (const std::exception& err) {
+        ThrowError(env, err.what());
+        return nullptr;
+      }
+      double value = 0.0;
+      if (!CheckCuda(env, cudaMemcpy(&value, a->data + offset, sizeof(double), cudaMemcpyDeviceToHost), "cudaMemcpyDeviceToHost")) return nullptr;
+      return MakeNumber(env, value);
+    }
+
     if (op == "set") {
       DeviceTensor* a = ParseCudaTensorArg(env, args.at(0));
       if (!a) return nullptr;
@@ -875,6 +914,39 @@ napi_value RunTensorOp(napi_env env, napi_callback_info info) {
         return nullptr;
       }
       if (!CheckCuda(env, cudaMemcpy(out->data + index, &value, sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpyHostToDevice")) {
+        TensorFinalizer(env, out, nullptr);
+        return nullptr;
+      }
+      return tensor_result(out);
+    }
+
+    if (op == "set_at") {
+      DeviceTensor* a = ParseCudaTensorArg(env, args.at(0));
+      if (!a) return nullptr;
+      if (args.size() < 3) {
+        ThrowError(env, "tensor.set_at expects indices and value");
+        return nullptr;
+      }
+      std::vector<int64_t> indices;
+      indices.reserve(args.size() - 2);
+      for (size_t i = 1; i + 1 < args.size(); ++i) {
+        indices.push_back(static_cast<int64_t>(std::llround(GetNumber(env, args.at(i)))));
+      }
+      size_t offset = 0;
+      try {
+        offset = LinearOffset(a->shape, indices, "tensor.set_at");
+      } catch (const std::exception& err) {
+        ThrowError(env, err.what());
+        return nullptr;
+      }
+      double value = GetNumber(env, args.back());
+      DeviceTensor* out = AllocateTensor(env, a->shape);
+      if (!out) return nullptr;
+      if (!CopyDeviceToDevice(env, out, a)) {
+        TensorFinalizer(env, out, nullptr);
+        return nullptr;
+      }
+      if (!CheckCuda(env, cudaMemcpy(out->data + offset, &value, sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpyHostToDevice")) {
         TensorFinalizer(env, out, nullptr);
         return nullptr;
       }

@@ -1,0 +1,48 @@
+import std.io as io
+import std.nn as nn
+import std.optim as optim
+import std.data.loader as loader
+import std.data.text as text
+import std.nn.trainer as trainer
+import std.tensor as tensor
+
+fn main():
+    let corpus = "aura learns aura builds aura trains aura"
+    let tok = text.tokenizer("char", false)
+    let tokens = tok.tokenize(corpus)
+    let vocab = text.vocab()
+    vocab.fit([tokens])
+
+    let data = __char_windows(vocab.encode(tokens), 5)
+    let train_loader = loader.data_loader(loader.tensor_dataset(data["X"], data["y"]), 8, true, false, 11)
+
+    let model = nn.sequential([nn.embedding(vocab.size(), 12), nn.lstm(12, 18), nn.linear(18, vocab.size())])
+    let device = "cpu"
+    if tensor.cuda_available():
+        device = "cuda:0"
+    let fit = trainer.trainer("classification", optim.adam(0.03), nil, nil, {"epochs": 50, "seed": 11, "verbose": false, "device": device})
+    fit.fit(model, train_loader, train_loader)
+    let stats = fit.evaluate(model, train_loader)
+
+    let seed_ids = tensor.tensor([data["seed"]])
+    let pred = fit.predict(model, seed_ids)
+    let next_id = int(pred.to_flat_list()[0])
+    let loss = stats["loss"]
+    let accuracy = stats["accuracy"]
+    let next_token = vocab.id_to_token(next_id)
+    io.println("char lm loss={loss} accuracy={accuracy} next='{next_token}' device={device}")
+
+fn __char_windows(ids, width: Int):
+    let xs = []
+    let ys = []
+    var i = 0
+    while i + width < len(ids):
+        let row = []
+        var j = 0
+        while j < width:
+            row.push(float(ids[i + j]))
+            j += 1
+        xs.push(row)
+        ys.push(float(ids[i + width]))
+        i += 1
+    return {"X": tensor.tensor(xs), "y": tensor.tensor(ys), "seed": xs[0]}

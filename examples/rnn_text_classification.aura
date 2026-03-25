@@ -1,0 +1,39 @@
+import std.io as io
+import std.nn as nn
+import std.optim as optim
+import std.data.loader as loader
+import std.data.text as text
+import std.nn.trainer as trainer
+import std.tensor as tensor
+
+fn main():
+    let train_texts = ["good bright happy", "great calm nice", "bad dark awful", "sad poor bleak", "excellent warm joyful", "terrible cold broken", "pleasant smooth kind", "angry harsh bitter"]
+    let train_labels = [1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0]
+    let test_texts = ["good kind calm", "bad bitter cold", "joyful warm bright", "awful dark poor"]
+    let test_labels = [1.0, 0.0, 1.0, 0.0]
+
+    let tok = text.tokenizer("whitespace", true)
+    let vocab = text.vocab()
+    let merged = []
+    for sample in train_texts:
+        merged.push(tok.tokenize(sample))
+    for sample in test_texts:
+        merged.push(tok.tokenize(sample))
+    vocab.fit(merged)
+
+    let train_ds = text.text_dataset(train_texts, train_labels, tok, vocab, 4, false, false)
+    let test_ds = text.text_dataset(test_texts, test_labels, tok, vocab, 4, false, false)
+    let train_loader = loader.data_loader(train_ds.to_tensor_dataset(), 4, true, false, 9)
+    let test_loader = loader.data_loader(test_ds.to_tensor_dataset(), 4, false, false, 9)
+
+    let model = nn.sequential([nn.embedding(vocab.size(), 12), nn.gru(12, 16), nn.linear(16, 2)])
+    let device = "cpu"
+    if tensor.cuda_available():
+        device = "cuda:0"
+    let fit = trainer.trainer("classification", optim.adam(0.03), nil, nil, {"epochs": 40, "seed": 9, "verbose": false, "device": device})
+    fit.fit(model, train_loader, test_loader)
+    let stats = fit.evaluate(model, test_loader)
+    let loss = stats["loss"]
+    let accuracy = stats["accuracy"]
+    let f1 = stats["f1"]
+    io.println("rnn text loss={loss} accuracy={accuracy} f1={f1} device={device}")

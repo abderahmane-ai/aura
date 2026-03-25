@@ -1502,6 +1502,14 @@ fn __collect_named_parameters(prefix: String, mod, out):
         if mod.bias != nil:
             out.push([prefix + "bias", mod.bias])
         return
+    if kind == "conv2d":
+        out.push([prefix + "weight", mod.weight])
+        if mod.bias != nil:
+            out.push([prefix + "bias", mod.bias])
+        return
+    if kind == "embedding":
+        out.push([prefix + "weight", mod.weight])
+        return
     if kind == "layer_norm":
         if mod.gamma != nil:
             out.push([prefix + "gamma", mod.gamma])
@@ -1511,6 +1519,23 @@ fn __collect_named_parameters(prefix: String, mod, out):
         if mod.gamma != nil:
             out.push([prefix + "gamma", mod.gamma])
             out.push([prefix + "beta", mod.beta])
+        return
+    if kind == "rnn":
+        out.push([prefix + "weight_ih", mod.weight_ih])
+        out.push([prefix + "weight_hh", mod.weight_hh])
+        if mod.bias_ih != nil:
+            out.push([prefix + "bias_ih", mod.bias_ih])
+            out.push([prefix + "bias_hh", mod.bias_hh])
+        return
+    if kind == "gru":
+        __push_named_many(prefix, out, [["weight_ir", mod.weight_ir], ["weight_iz", mod.weight_iz], ["weight_in", mod.weight_in], ["weight_hr", mod.weight_hr], ["weight_hz", mod.weight_hz], ["weight_hn", mod.weight_hn]])
+        if mod.bias_ir != nil:
+            __push_named_many(prefix, out, [["bias_ir", mod.bias_ir], ["bias_iz", mod.bias_iz], ["bias_in", mod.bias_in], ["bias_hr", mod.bias_hr], ["bias_hz", mod.bias_hz], ["bias_hn", mod.bias_hn]])
+        return
+    if kind == "lstm":
+        __push_named_many(prefix, out, [["weight_ii", mod.weight_ii], ["weight_if", mod.weight_if], ["weight_ig", mod.weight_ig], ["weight_io", mod.weight_io], ["weight_hi", mod.weight_hi], ["weight_hf", mod.weight_hf], ["weight_hg", mod.weight_hg], ["weight_ho", mod.weight_ho]])
+        if mod.bias_ii != nil:
+            __push_named_many(prefix, out, [["bias_ii", mod.bias_ii], ["bias_if", mod.bias_if], ["bias_ig", mod.bias_ig], ["bias_io", mod.bias_io], ["bias_hi", mod.bias_hi], ["bias_hf", mod.bias_hf], ["bias_hg", mod.bias_hg], ["bias_ho", mod.bias_ho]])
         return
     if kind == "sequential":
         var i = 0
@@ -1555,6 +1580,14 @@ fn __move_module_tensors(mod, device: String):
         if mod.bias != nil:
             mod.bias.to(device)
         return
+    if kind == "conv2d":
+        mod.weight.to(device)
+        if mod.bias != nil:
+            mod.bias.to(device)
+        return
+    if kind == "embedding":
+        mod.weight.to(device)
+        return
     if kind == "layer_norm":
         if mod.gamma != nil:
             mod.gamma.to(device)
@@ -1566,6 +1599,23 @@ fn __move_module_tensors(mod, device: String):
             mod.beta.to(device)
         mod.running_mean = mod.running_mean.to(device)
         mod.running_var = mod.running_var.to(device)
+        return
+    if kind == "rnn":
+        mod.weight_ih.to(device)
+        mod.weight_hh.to(device)
+        if mod.bias_ih != nil:
+            mod.bias_ih.to(device)
+            mod.bias_hh.to(device)
+        return
+    if kind == "gru":
+        __move_many(device, [mod.weight_ir, mod.weight_iz, mod.weight_in, mod.weight_hr, mod.weight_hz, mod.weight_hn])
+        if mod.bias_ir != nil:
+            __move_many(device, [mod.bias_ir, mod.bias_iz, mod.bias_in, mod.bias_hr, mod.bias_hz, mod.bias_hn])
+        return
+    if kind == "lstm":
+        __move_many(device, [mod.weight_ii, mod.weight_if, mod.weight_ig, mod.weight_io, mod.weight_hi, mod.weight_hf, mod.weight_hg, mod.weight_ho])
+        if mod.bias_ii != nil:
+            __move_many(device, [mod.bias_ii, mod.bias_if, mod.bias_ig, mod.bias_io, mod.bias_hi, mod.bias_hf, mod.bias_hg, mod.bias_ho])
         return
     if kind == "sequential":
         for child in mod.modules:
@@ -1591,6 +1641,14 @@ fn __load_state(prefix: String, mod, state):
         if mod.bias != nil:
             __load_param(state, prefix + "bias", mod.bias)
         return
+    if kind == "conv2d":
+        __load_param(state, prefix + "weight", mod.weight)
+        if mod.bias != nil:
+            __load_param(state, prefix + "bias", mod.bias)
+        return
+    if kind == "embedding":
+        __load_param(state, prefix + "weight", mod.weight)
+        return
     if kind == "layer_norm":
         if mod.gamma != nil:
             __load_param(state, prefix + "gamma", mod.gamma)
@@ -1602,6 +1660,23 @@ fn __load_state(prefix: String, mod, state):
             __load_param(state, prefix + "beta", mod.beta)
         __load_tensor(state, prefix + "running_mean", mod.running_mean)
         __load_tensor(state, prefix + "running_var", mod.running_var)
+        return
+    if kind == "rnn":
+        __load_param(state, prefix + "weight_ih", mod.weight_ih)
+        __load_param(state, prefix + "weight_hh", mod.weight_hh)
+        if mod.bias_ih != nil:
+            __load_param(state, prefix + "bias_ih", mod.bias_ih)
+            __load_param(state, prefix + "bias_hh", mod.bias_hh)
+        return
+    if kind == "gru":
+        __load_many(prefix, state, [["weight_ir", mod.weight_ir], ["weight_iz", mod.weight_iz], ["weight_in", mod.weight_in], ["weight_hr", mod.weight_hr], ["weight_hz", mod.weight_hz], ["weight_hn", mod.weight_hn]])
+        if mod.bias_ir != nil:
+            __load_many(prefix, state, [["bias_ir", mod.bias_ir], ["bias_iz", mod.bias_iz], ["bias_in", mod.bias_in], ["bias_hr", mod.bias_hr], ["bias_hz", mod.bias_hz], ["bias_hn", mod.bias_hn]])
+        return
+    if kind == "lstm":
+        __load_many(prefix, state, [["weight_ii", mod.weight_ii], ["weight_if", mod.weight_if], ["weight_ig", mod.weight_ig], ["weight_io", mod.weight_io], ["weight_hi", mod.weight_hi], ["weight_hf", mod.weight_hf], ["weight_hg", mod.weight_hg], ["weight_ho", mod.weight_ho]])
+        if mod.bias_ii != nil:
+            __load_many(prefix, state, [["bias_ii", mod.bias_ii], ["bias_if", mod.bias_if], ["bias_ig", mod.bias_ig], ["bias_io", mod.bias_io], ["bias_hi", mod.bias_hi], ["bias_hf", mod.bias_hf], ["bias_hg", mod.bias_hg], ["bias_ho", mod.bias_ho]])
         return
     if kind == "sequential":
         var i = 0
@@ -1632,8 +1707,25 @@ fn __serialize_module(mod):
         base["bias_enabled"] = mod.bias_enabled
         base["init_name"] = mod.init_name
         return base
+    if kind == "conv2d":
+        base["in_channels"] = mod.in_channels
+        base["out_channels"] = mod.out_channels
+        base["kernel_size"] = mod.kernel_size
+        base["stride"] = mod.stride
+        base["padding"] = mod.padding
+        base["dilation"] = mod.dilation
+        base["bias_enabled"] = mod.bias_enabled
+        return base
+    if kind == "embedding":
+        base["num_embeddings"] = mod.num_embeddings
+        base["embedding_dim"] = mod.embedding_dim
+        return base
     if kind == "dropout":
         base["p"] = mod.p
+        return base
+    if kind == "flatten":
+        base["start_dim"] = mod.start_dim
+        base["end_dim"] = mod.end_dim
         return base
     if kind == "layer_norm":
         base["features"] = mod.features
@@ -1646,6 +1738,19 @@ fn __serialize_module(mod):
         base["momentum"] = mod.momentum
         base["affine"] = mod.affine
         base["track_running_stats"] = mod.track_running_stats
+        return base
+    if kind == "avg_pool2d" or kind == "max_pool2d":
+        base["kernel_size"] = mod.kernel_size
+        base["stride"] = mod.stride
+        base["padding"] = mod.padding
+        return base
+    if kind == "adaptive_avg_pool2d":
+        base["output_size"] = mod.output_size
+        return base
+    if kind == "rnn" or kind == "gru" or kind == "lstm":
+        base["input_size"] = mod.input_size
+        base["hidden_size"] = mod.hidden_size
+        base["bias_enabled"] = __has_bias_params(mod)
         return base
     if kind == "sequential":
         let children = []
@@ -1663,6 +1768,10 @@ fn __deserialize_module(data):
     let mod = nil
     if kind == "linear":
         mod = Linear(int(data["in_features"]), int(data["out_features"]), data["bias_enabled"] == true, data["init_name"])
+    elif kind == "conv2d":
+        mod = Conv2d(int(data["in_channels"]), int(data["out_channels"]), data["kernel_size"], data["stride"], data["padding"], data["dilation"], data["bias_enabled"] == true)
+    elif kind == "embedding":
+        mod = Embedding(int(data["num_embeddings"]), int(data["embedding_dim"]))
     elif kind == "relu":
         mod = ReLU()
     elif kind == "sigmoid":
@@ -1673,10 +1782,24 @@ fn __deserialize_module(data):
         mod = Identity()
     elif kind == "dropout":
         mod = Dropout(float(data["p"]))
+    elif kind == "flatten":
+        mod = Flatten(int(data["start_dim"]), int(data["end_dim"]))
     elif kind == "layer_norm":
         mod = LayerNorm(int(data["features"]), float(data["eps"]), data["affine"] == true)
     elif kind == "batch_norm1d":
         mod = BatchNorm1d(int(data["features"]), float(data["eps"]), float(data["momentum"]), data["affine"] == true, data["track_running_stats"] == true)
+    elif kind == "avg_pool2d":
+        mod = AvgPool2d(data["kernel_size"], data["stride"], data["padding"])
+    elif kind == "max_pool2d":
+        mod = MaxPool2d(data["kernel_size"], data["stride"], data["padding"])
+    elif kind == "adaptive_avg_pool2d":
+        mod = AdaptiveAvgPool2d(data["output_size"])
+    elif kind == "rnn":
+        mod = RNN(int(data["input_size"]), int(data["hidden_size"]), data["bias_enabled"] == true)
+    elif kind == "gru":
+        mod = GRU(int(data["input_size"]), int(data["hidden_size"]), data["bias_enabled"] == true)
+    elif kind == "lstm":
+        mod = LSTM(int(data["input_size"]), int(data["hidden_size"]), data["bias_enabled"] == true)
     elif kind == "sequential":
         let children = []
         for child in data["modules"]:
@@ -1704,6 +1827,79 @@ fn __apply_linear_init(mod):
     if mod.bias != nil:
         init.zeros_(mod.bias)
 
+fn __apply_conv_init(mod):
+    let fan_in = mod.in_channels * mod.kernel_size[0] * mod.kernel_size[1]
+    init.he_uniform_(mod.weight, fan_in)
+    if mod.bias != nil:
+        init.zeros_(mod.bias)
+
+fn __apply_recurrent_init(param, fan_in: Int, fan_out: Int):
+    init.xavier_uniform_(param, fan_in, fan_out)
+
+fn __pair(value):
+    if __type_of(value) == "list":
+        let parts = to_list(value)
+        if len(parts) != 2:
+            panic("nn expected pair [a, b]")
+        return [int(parts[0]), int(parts[1])]
+    let scalar = int(value)
+    return [scalar, scalar]
+
+fn __push_named_many(prefix: String, out, items):
+    for item in items:
+        out.push([prefix + item[0], item[1]])
+
+fn __load_many(prefix: String, state, items):
+    for item in items:
+        __load_param(state, prefix + item[0], item[1])
+
+fn __move_many(device: String, params):
+    for param in params:
+        param.to(device)
+
+fn __zero_many(params):
+    for param in params:
+        init.zeros_(param)
+
+fn __ones_like(v):
+    return autograd.variable(tensor.ones_like(v.data), false)
+
+fn __ensure_sequence_shape(data, input_size: Int, label: String):
+    if data.rank() != 3:
+        panic("{label} expects rank-3 input [batch, time, features]")
+    if data.shape()[2] != input_size:
+        panic("{label} input feature mismatch")
+
+fn __gru_gate(x_t, weight_i, bias_i, h_t, weight_h, bias_h):
+    let out = x_t.matmul(weight_i).add(h_t.matmul(weight_h))
+    if bias_i != nil:
+        return out.add(bias_i).add(bias_h).sigmoid()
+    return out.sigmoid()
+
+fn __lstm_gate(x_t, weight_i, bias_i, h_t, weight_h, bias_h):
+    let out = x_t.matmul(weight_i).add(h_t.matmul(weight_h))
+    if bias_i != nil:
+        return out.add(bias_i).add(bias_h).sigmoid()
+    return out.sigmoid()
+
+fn __lstm_candidate(x_t, weight_i, bias_i, h_t, weight_h, bias_h):
+    let out = x_t.matmul(weight_i).add(h_t.matmul(weight_h))
+    if bias_i != nil:
+        return out.add(bias_i).add(bias_h).tanh()
+    return out.tanh()
+
+fn __has_bias_params(mod) -> Bool:
+    let kind = mod.kind
+    if kind == "linear" or kind == "conv2d":
+        return mod.bias != nil
+    if kind == "rnn":
+        return mod.bias_ih != nil
+    if kind == "gru":
+        return mod.bias_ir != nil
+    if kind == "lstm":
+        return mod.bias_ii != nil
+    return false
+
 fn __tensor_state(t):
     return {"shape": t.shape(), "values": t.to_flat_list()}
 
@@ -1711,8 +1907,11 @@ fn __tensor_from_state(state):
     return tensor.tensor(state["values"]).reshape(state["shape"])
 
 fn __copy_tensor(dst, src):
+    let source = src
+    if source.device() != dst.device():
+        source = source.to(dst.device())
     dst.mul_(0.0)
-    dst.add_(src)
+    dst.add_(source)
     return dst
 
 fn __same_shape(a, b):

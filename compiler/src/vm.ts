@@ -1639,8 +1639,10 @@ export class VM {
                 const unbiased = args[2] === true;
                 return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('var_axis', [data], { axis: this.asNumber(axis, 'tensor.var_axis axis'), keepdim, unbiased }, 'tensor.var_axis') } as AuraNative;
             }
-            case 'argmax_axis':
-                return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('argmax_axis', [data], { axis: this.asNumber(args[0] ?? -1, 'tensor.argmax_axis axis') }, 'tensor.argmax_axis') } as AuraNative;
+            case 'argmax_axis': {
+                const host = this.tensorHostData(data, 'tensor.argmax_axis');
+                return this.tensorArgmaxAxis(host, args[0]);
+            }
             case 'unsqueeze':
                 return { type: 'native', kind: 'tensor', data: this.cudaTensorOpTensor('unsqueeze', [data], { axis: this.expectInteger(args[0], 'tensor.unsqueeze axis') }, 'tensor.unsqueeze') } as AuraNative;
             case 'squeeze':

@@ -68,8 +68,34 @@ fn to_flat_list(t):
 fn clone(t):
     return t.clone()
 
-fn flatten(t):
-    return t.flatten()
+fn flatten(t, start_dim = nil, end_dim = nil):
+    if start_dim == nil and end_dim == nil:
+        return t.flatten()
+    let x = tensor(t)
+    let shape = x.shape()
+    let rank = len(shape)
+    var start = int(start_dim)
+    var stop = int(end_dim)
+    if start < 0:
+        start += rank
+    if stop < 0:
+        stop += rank
+    if start < 0 or stop < start or stop >= rank:
+        panic("tensor.flatten invalid dims")
+    let out_shape = []
+    var i = 0
+    while i < start:
+        out_shape.push(shape[i])
+        i += 1
+    var merged = 1
+    while i <= stop:
+        merged *= shape[i]
+        i += 1
+    out_shape.push(merged)
+    while i < rank:
+        out_shape.push(shape[i])
+        i += 1
+    return x.reshape(out_shape)
 
 fn reshape(t, shape):
     return t.reshape(shape)
@@ -151,6 +177,178 @@ fn slice_rows(t, start: Int = 0, stop = nil):
 
 fn take_rows(t, indices):
     return t.take_rows(indices)
+
+fn permute(t, dims):
+    let x = tensor(t)
+    let order = to_list(dims)
+    let rank = x.rank()
+    if len(order) != rank:
+        panic("tensor.permute dims length must match rank")
+    let seen = {}
+    let out_shape = []
+    for raw in order:
+        let axis = int(raw)
+        if axis < 0 or axis >= rank:
+            panic("tensor.permute axis out of range")
+        if seen[str(axis)] == true:
+            panic("tensor.permute dims must be unique")
+        seen[str(axis)] = true
+        out_shape.push(x.shape()[axis])
+    let out = zeros(out_shape, x.device())
+    let total = out.len()
+    var idx = 0
+    while idx < total:
+        let out_coords = __coords_from_index(idx, out_shape)
+        let in_coords = __filled_list(rank, 0)
+        var i = 0
+        while i < rank:
+            in_coords[int(order[i])] = out_coords[i]
+            i += 1
+        __tensor_set_coords(out, out_coords, __tensor_get_coords(x, in_coords))
+        idx += 1
+    return out
+
+fn concat(items, axis: Int = 0):
+    let tensors = []
+    for item in to_list(items):
+        tensors.push(tensor(item))
+    if len(tensors) == 0:
+        panic("tensor.concat expects at least one tensor")
+    let base = tensors[0]
+    let rank = base.rank()
+    var actual_axis = axis
+    if actual_axis < 0:
+        actual_axis += rank
+    if actual_axis < 0 or actual_axis >= rank:
+        panic("tensor.concat axis out of range")
+    if actual_axis != 0:
+        let order = [actual_axis]
+        var i = 0
+        while i < rank:
+            if i != actual_axis:
+                order.push(i)
+            i += 1
+        let moved = []
+        for part in tensors:
+            moved.push(permute(part, order))
+        return permute(concat(moved, 0), __inverse_permutation(order))
+    let out_shape = to_list(base.shape())
+    out_shape[actual_axis] = 0
+    for part in tensors:
+        if part.rank() != rank:
+            panic("tensor.concat rank mismatch")
+        var i = 0
+        while i < rank:
+            if i != actual_axis and part.shape()[i] != base.shape()[i]:
+                panic("tensor.concat shape mismatch")
+            i += 1
+        out_shape[actual_axis] = out_shape[actual_axis] + part.shape()[actual_axis]
+    let values = []
+    for part in tensors:
+        for value in part.to_flat_list():
+            values.push(value)
+    return tensor(values, base.device()).reshape(out_shape)
+
+fn stack(items, axis: Int = 0):
+    let tensors = []
+    for item in to_list(items):
+        tensors.push(tensor(item))
+    if len(tensors) == 0:
+        panic("tensor.stack expects at least one tensor")
+    let rank = tensors[0].rank()
+    var actual_axis = axis
+    if actual_axis < 0:
+        actual_axis += rank + 1
+    if actual_axis < 0 or actual_axis > rank:
+        panic("tensor.stack axis out of range")
+    let expanded = []
+    for part in tensors:
+        if not __same_shape(part.shape(), tensors[0].shape()):
+            panic("tensor.stack shape mismatch")
+        expanded.push(part.unsqueeze(actual_axis))
+    return concat(expanded, actual_axis)
+
+fn pad(t, pads, value: Float64 = 0.0):
+    let x = tensor(t)
+    let shape = x.shape()
+    let spec = __normalize_pads(pads, len(shape))
+    let out_shape = []
+    var i = 0
+    while i < len(shape):
+        out_shape.push(shape[i] + spec[i][0] + spec[i][1])
+        i += 1
+    let out = full(out_shape, value, x.device())
+    let total = x.len()
+    var idx = 0
+    while idx < total:
+        let coords = __coords_from_index(idx, shape)
+        let dst = []
+        var j = 0
+        while j < len(shape):
+            dst.push(coords[j] + spec[j][0])
+            j += 1
+        __tensor_set_coords(out, dst, __tensor_get_coords(x, coords))
+        idx += 1
+    return out
+
+fn index_select(t, axis: Int, indices):
+    let x = tensor(t)
+    let picks = to_list(indices)
+    let rank = x.rank()
+    var actual_axis = axis
+    if actual_axis < 0:
+        actual_axis += rank
+    if actual_axis < 0 or actual_axis >= rank:
+        panic("tensor.index_select axis out of range")
+    let out_shape = to_list(x.shape())
+    out_shape[actual_axis] = len(picks)
+    let out = zeros(out_shape, x.device())
+    let total = out.len()
+    var idx = 0
+    while idx < total:
+        let out_coords = __coords_from_index(idx, out_shape)
+        let src = to_list(out_coords)
+        src[actual_axis] = int(picks[out_coords[actual_axis]])
+        __tensor_set_coords(out, out_coords, __tensor_get_coords(x, src))
+        idx += 1
+    return out
+
+fn split(t, split_size: Int, axis: Int = 0):
+    let x = tensor(t)
+    if split_size <= 0:
+        panic("tensor.split expects split_size > 0")
+    let rank = x.rank()
+    var actual_axis = axis
+    if actual_axis < 0:
+        actual_axis += rank
+    if actual_axis < 0 or actual_axis >= rank:
+        panic("tensor.split axis out of range")
+    let parts = []
+    let n = x.shape()[actual_axis]
+    var start = 0
+    while start < n:
+        var stop = start + split_size
+        if stop > n:
+            stop = n
+        parts.push(__slice_axis(x, actual_axis, start, stop))
+        start = stop
+    return parts
+
+fn chunk(t, chunks: Int, axis: Int = 0):
+    let x = tensor(t)
+    if chunks <= 0:
+        panic("tensor.chunk expects chunks > 0")
+    let rank = x.rank()
+    var actual_axis = axis
+    if actual_axis < 0:
+        actual_axis += rank
+    if actual_axis < 0 or actual_axis >= rank:
+        panic("tensor.chunk axis out of range")
+    let n = x.shape()[actual_axis]
+    var actual_size = int((n + chunks - 1) / chunks)
+    if actual_size < 1:
+        actual_size = 1
+    return split(x, actual_size, actual_axis)
 
 fn map(t, fn_ref):
     return t.map(fn_ref)
@@ -406,6 +604,99 @@ fn __same_shape(a, b):
             return false
         i += 1
     return true
+
+fn __filled_list(n: Int, value):
+    let out = []
+    var i = 0
+    while i < n:
+        out.push(value)
+        i += 1
+    return out
+
+fn __coords_from_index(index: Int, shape):
+    let coords = __filled_list(len(shape), 0)
+    var rem = index
+    var i = len(shape) - 1
+    while i >= 0:
+        let dim = shape[i]
+        if dim <= 0:
+            coords[i] = 0
+        else:
+            coords[i] = rem % dim
+            rem = int(rem / dim)
+        i -= 1
+    return coords
+
+fn __tensor_get_coords(t, coords):
+    let rank = len(coords)
+    if rank == 1:
+        return float(t.at(coords[0]))
+    if rank == 2:
+        return float(t.at(coords[0], coords[1]))
+    if rank == 3:
+        return float(t.at(coords[0], coords[1], coords[2]))
+    if rank == 4:
+        return float(t.at(coords[0], coords[1], coords[2], coords[3]))
+    panic("tensor helper only supports rank up to 4 in v1")
+
+fn __tensor_set_coords(t, coords, value: Float64):
+    let rank = len(coords)
+    if rank == 1:
+        t.set_at(coords[0], value)
+        return t
+    if rank == 2:
+        t.set_at(coords[0], coords[1], value)
+        return t
+    if rank == 3:
+        t.set_at(coords[0], coords[1], coords[2], value)
+        return t
+    if rank == 4:
+        t.set_at(coords[0], coords[1], coords[2], coords[3], value)
+        return t
+    panic("tensor helper only supports rank up to 4 in v1")
+
+fn __normalize_pads(pads, rank: Int):
+    let raw = to_list(pads)
+    if len(raw) == rank:
+        let out = []
+        for entry in raw:
+            let pair = to_list(entry)
+            if len(pair) != 2:
+                panic("tensor.pad expects pad pairs [before, after]")
+            out.push([int(pair[0]), int(pair[1])])
+        return out
+    if len(raw) == rank * 2:
+        let out = []
+        var i = 0
+        while i < len(raw):
+            out.push([int(raw[i]), int(raw[i + 1])])
+            i += 2
+        return out
+    panic("tensor.pad expects rank pad pairs or flat list of length 2*rank")
+
+fn __slice_axis(t, axis: Int, start: Int, stop: Int):
+    let x = tensor(t)
+    let shape = to_list(x.shape())
+    let out_shape = to_list(shape)
+    out_shape[axis] = stop - start
+    let out = zeros(out_shape, x.device())
+    let total = out.len()
+    var idx = 0
+    while idx < total:
+        let coords = __coords_from_index(idx, out_shape)
+        let src = to_list(coords)
+        src[axis] += start
+        __tensor_set_coords(out, coords, __tensor_get_coords(x, src))
+        idx += 1
+    return out
+
+fn __inverse_permutation(order):
+    let out = __filled_list(len(order), 0)
+    var i = 0
+    while i < len(order):
+        out[int(order[i])] = i
+        i += 1
+    return out
 
 fn __ensure_one_hot_target(target, pred):
     let y = tensor(target)

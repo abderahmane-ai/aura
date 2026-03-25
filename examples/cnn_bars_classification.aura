@@ -1,0 +1,59 @@
+import std.io as io
+import std.nn as nn
+import std.optim as optim
+import std.data.loader as loader
+import std.nn.trainer as trainer
+import std.tensor as tensor
+
+fn main():
+    let train = __bars_dataset(24)
+    let test = __bars_dataset(8)
+
+    let batch_size = 8
+    let train_loader = loader.data_loader(loader.tensor_dataset(train["X"], train["y"]), batch_size, true, false, 7)
+    let test_loader = loader.data_loader(loader.tensor_dataset(test["X"], test["y"]), batch_size, false, false, 7)
+
+    let model = nn.sequential([nn.conv2d(1, 4, 3, 1, 1), nn.relu(), nn.max_pool2d(2), nn.adaptive_avg_pool2d([1, 1]), nn.flatten(), nn.linear(4, 2)])
+    let device = "cpu"
+    if tensor.cuda_available():
+        device = "cuda:0"
+    let fit = trainer.trainer("classification", optim.adam(0.02), nil, nil, {"epochs": 12, "seed": 7, "verbose": false, "device": device})
+    fit.fit(model, train_loader, test_loader)
+    let stats = fit.evaluate(model, test_loader)
+    let loss = stats["loss"]
+    let accuracy = stats["accuracy"]
+    let f1 = stats["f1"]
+    io.println("cnn bars loss={loss} accuracy={accuracy} f1={f1} device={device}")
+
+fn __bars_dataset(n: Int):
+    let xs = []
+    let ys = []
+    var i = 0
+    while i < n:
+        let label = i % 2
+        xs.push([__bar_image(label, i % 3)])
+        ys.push(float(label))
+        i += 1
+    return {"X": tensor.tensor(xs), "y": tensor.tensor(ys)}
+
+fn __bar_image(label: Int, variant: Int):
+    let image = []
+    var y = 0
+    while y < 4:
+        let row = []
+        var x = 0
+        while x < 4:
+            var value = 0.0
+            if label == 0:
+                let stripe = 1 + (variant % 2)
+                if x == stripe:
+                    value = 1.0
+            else:
+                let stripe = 1 + (variant % 2)
+                if y == stripe:
+                    value = 1.0
+            row.push(value)
+            x += 1
+        image.push(row)
+        y += 1
+    return image

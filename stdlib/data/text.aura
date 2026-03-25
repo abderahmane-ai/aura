@@ -84,8 +84,10 @@ class Vocab:
                     count = 0
                 counts[token] = count + 1
         self.__reset()
-        let keys = sort(keys(counts))
-        for token in keys:
+        let names = []
+        for token in counts:
+            names.push(token)
+        for token in sort(names):
             if counts[token] >= self.min_freq:
                 self.__add_token(token)
         return self

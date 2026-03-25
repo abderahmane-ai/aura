@@ -11,6 +11,7 @@ pnpm-debug.log*
 
 # Build artifacts
 compiler/dist/
+compiler/native/build/
 editor/vscode/out/
 editor/vscode/.vsix-build/
 editor/vscode/*.vsix
